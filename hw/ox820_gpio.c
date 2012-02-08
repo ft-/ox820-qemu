@@ -12,6 +12,7 @@ typedef struct {
     SysBusDevice    busdev;
     MemoryRegion    iomem;
 
+    uint32_t        inputs;
     uint32_t        output_enable;
     uint32_t        irq_enable_mask;
     uint32_t        irq_event;
@@ -21,7 +22,6 @@ typedef struct {
     uint32_t        falling_edge_irq_enable;
     uint32_t        rising_edge_irq_events;
     uint32_t        falling_edge_irq_events;
-    uint32_t        irq_status;
     uint32_t        invert_enable;
     uint32_t        clock_divider;
     uint32_t        pwm_irq_timer;
@@ -35,7 +35,16 @@ typedef struct {
 
 static void ox820_gpio_irq_update(ox820_gpio_state* s)
 {
-    qemu_set_irq(s->irq, 0);
+    int irqset = 0;
+    if(s->rising_edge_irq_events & s->rising_edge_irq_enable)
+    {
+        irqset = 1;
+    }
+    if(s->falling_edge_irq_events & s->falling_edge_irq_enable)
+    {
+        irqset = 1;
+    }
+    qemu_set_irq(s->irq, irqset);
 }
 
 static uint64_t ox820_gpio_read(void *opaque, target_phys_addr_t offset,
@@ -45,6 +54,10 @@ static uint64_t ox820_gpio_read(void *opaque, target_phys_addr_t offset,
     uint32_t c = 0;
 
     switch (offset >> 2) {
+    case 0x0000 >> 2:
+        c = s->inputs;
+        break;
+
     case 0x0004 >> 2:
         c = s->output_enable;
         break;
@@ -54,7 +67,7 @@ static uint64_t ox820_gpio_read(void *opaque, target_phys_addr_t offset,
         break;
 
     case 0x000C >> 2:
-        c = s->irq_event;
+        c = s->rising_edge_irq_events | s->falling_edge_irq_events;
         break;
 
     case 0x0010 >> 2:
@@ -82,7 +95,15 @@ static uint64_t ox820_gpio_read(void *opaque, target_phys_addr_t offset,
         break;
 
     case 0x003C >> 2:
-        c = s->irq_status;
+        c = 0;
+        if(s->rising_edge_irq_events & s->rising_edge_irq_enable)
+        {
+            c |= 0x1;
+        }
+        if(s->falling_edge_irq_events & s->falling_edge_irq_enable)
+        {
+            c |= 0x2;
+        }
         break;
 
     case 0x0040 >> 2:
@@ -142,6 +163,9 @@ static void ox820_gpio_write(void *opaque, target_phys_addr_t offset,
         break;
 
     case 0x000C >> 2:
+        s->rising_edge_irq_events &= ~value;
+        s->falling_edge_irq_events &= ~value;
+        ox820_gpio_irq_update(s);
         break;
 
     case 0x0010 >> 2:
@@ -189,8 +213,6 @@ static void ox820_gpio_write(void *opaque, target_phys_addr_t offset,
         break;
 
     case 0x003C >> 2:
-        s->irq_status &= (~value);
-        ox820_gpio_irq_update(s);
         break;
 
     case 0x0040 >> 2:
@@ -234,6 +256,28 @@ static void ox820_gpio_write(void *opaque, target_phys_addr_t offset,
     }
 }
 
+static void ox820_gpio_set(void *opaque, int irq, int level)
+{
+    ox820_gpio_state *s = (ox820_gpio_state *)opaque;
+    uint32_t new_val;
+    uint32_t edge;
+
+    if(level)
+    {
+        new_val = s->inputs | (1u << irq);
+    }
+    else
+    {
+        new_val = s->inputs &= ~(1u << irq);
+    }
+    edge = s->inputs ^ new_val;
+
+    s->rising_edge_irq_events |= (edge & (new_val ^ s->invert_enable));
+    s->falling_edge_irq_events |= (edge & ~(new_val ^ s->invert_enable));
+
+    ox820_gpio_irq_update(s);
+}
+
 static void ox820_gpio_reset(DeviceState *d)
 {
     ox820_gpio_state *s = DO_UPCAST(ox820_gpio_state, busdev.qdev, d);
@@ -248,7 +292,6 @@ static void ox820_gpio_reset(DeviceState *d)
     s->falling_edge_irq_enable = 0;
     s->rising_edge_irq_events = 0;
     s->falling_edge_irq_events = 0;
-    s->irq_status = 0;
     s->invert_enable = 0;
     s->clock_divider = 0;
     s->pwm_irq_timer = 0;
@@ -276,6 +319,7 @@ static const VMStateDescription vmstate_ox820_gpio = {
     .minimum_version_id = 1,
     .minimum_version_id_old = 1,
     .fields      = (VMStateField[]) {
+        VMSTATE_UINT32(inputs, ox820_gpio_state),
         VMSTATE_UINT32(output_enable, ox820_gpio_state),
         VMSTATE_UINT32(irq_enable_mask, ox820_gpio_state),
         VMSTATE_UINT32(irq_event, ox820_gpio_state),
@@ -285,7 +329,6 @@ static const VMStateDescription vmstate_ox820_gpio = {
         VMSTATE_UINT32(falling_edge_irq_enable, ox820_gpio_state),
         VMSTATE_UINT32(rising_edge_irq_events, ox820_gpio_state),
         VMSTATE_UINT32(falling_edge_irq_events, ox820_gpio_state),
-        VMSTATE_UINT32(irq_status, ox820_gpio_state),
         VMSTATE_UINT32(invert_enable, ox820_gpio_state),
         VMSTATE_UINT32(clock_divider, ox820_gpio_state),
         VMSTATE_UINT32(pwm_irq_timer, ox820_gpio_state),
@@ -305,6 +348,7 @@ static int ox820_gpio_init(SysBusDevice *dev)
     memory_region_init_io(&s->iomem, &ox820_gpio_ops, s, "ox820-gpio", 0x10000);
     sysbus_init_mmio(dev, &s->iomem);
     sysbus_init_irq(dev, &s->irq);
+    qdev_init_gpio_in(&dev->qdev, ox820_gpio_set, 32);
 
     s->output_enable = 0;
     s->irq_enable_mask = 0;
@@ -315,12 +359,12 @@ static int ox820_gpio_init(SysBusDevice *dev)
     s->falling_edge_irq_enable = 0;
     s->rising_edge_irq_events = 0;
     s->falling_edge_irq_events = 0;
-    s->irq_status = 0;
     s->invert_enable = 0;
     s->clock_divider = 0;
     s->pwm_irq_timer = 0;
     s->pull_enable = 0;
     s->pull_sense = 0;
+    s->inputs = 0;
 
     for(i = 0; i < 32; ++i)
     {
