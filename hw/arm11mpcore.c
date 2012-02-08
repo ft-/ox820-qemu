@@ -127,7 +127,6 @@ static void mpcore_priv_map_setup(mpcore_priv_state *s)
 static int mpcore_priv_init(SysBusDevice *dev)
 {
     mpcore_priv_state *s = FROM_SYSBUSGIC(mpcore_priv_state, dev);
-
     gic_init(&s->gic, s->num_cpu, s->num_irq);
     s->mptimer = qdev_create(NULL, "arm_mptimer");
     qdev_prop_set_uint32(s->mptimer, "num-cpu", s->num_cpu);
@@ -146,6 +145,7 @@ typedef struct {
     qemu_irq cpuic[32];
     qemu_irq rvic[4][64];
     uint32_t num_cpu;
+    uint32_t num_irq;
 } mpcore_rirq_state;
 
 /* Map baseboard IRQs onto CPU IRQ lines.  */
@@ -179,9 +179,9 @@ static int realview_mpcore_init(SysBusDevice *dev)
     DeviceState *priv;
     int n;
     int i;
-
     priv = qdev_create(NULL, "arm11mpcore_priv");
     qdev_prop_set_uint32(priv, "num-cpu", s->num_cpu);
+    qdev_prop_set_uint32(priv, "num-irq", s->num_irq);
     qdev_init_nofail(priv);
     s->priv = sysbus_from_qdev(priv);
     sysbus_pass_irq(dev, s->priv);
@@ -202,7 +202,7 @@ static int realview_mpcore_init(SysBusDevice *dev)
 }
 
 static Property mpcore_rirq_properties[] = {
-    DEFINE_PROP_UINT32("num-cpu", mpcore_priv_state, num_cpu, 1),
+    DEFINE_PROP_UINT32("num-cpu", mpcore_rirq_state, num_cpu, 1),
     /* The ARM11 MPCORE TRM says the on-chip controller may have
      * anything from 0 to 224 external interrupt IRQ lines (with another
      * 32 internal). We default to 32+32, which is the number provided by
@@ -211,7 +211,7 @@ static Property mpcore_rirq_properties[] = {
      * appropriately. Some Linux kernels may not boot if the hardware
      * has more IRQ lines than the kernel expects.
      */
-    DEFINE_PROP_UINT32("num-irq", mpcore_priv_state, num_irq, 64),
+    DEFINE_PROP_UINT32("num-irq", mpcore_rirq_state, num_irq, 64),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -233,6 +233,7 @@ static TypeInfo mpcore_rirq_info = {
 
 static Property mpcore_priv_properties[] = {
     DEFINE_PROP_UINT32("num-cpu", mpcore_priv_state, num_cpu, 1),
+    DEFINE_PROP_UINT32("num-irq", mpcore_priv_state, num_irq, 64),
     DEFINE_PROP_END_OF_LIST(),
 };
 
