@@ -87,38 +87,46 @@ static void ox820_init(ram_addr_t ram_size,
     cpu_pic0 = arm_pic_init_cpu(env0);
     cpu_pic1 = arm_pic_init_cpu(env1);
 
-    dev = qdev_create(NULL, "realview_mpcore");
+    dev = qdev_create(NULL, "arm11mpcore_priv");
     qdev_prop_set_uint32(dev, "num-cpu", 2);
     qdev_prop_set_uint32(dev, "num-irq", 64);
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
     sysbus_mmio_map(busdev, 0, 0x47000000);
-    sysbus_connect_irq(busdev, 0, cpu_pic0[ARM_PIC_CPU_IRQ]);
-    sysbus_connect_irq(busdev, 1, cpu_pic1[ARM_PIC_CPU_IRQ]);
+    sysbus_connect_irq(busdev, 0, cpu_pic0[ARM_PIC_CPU_FIQ]);
+    sysbus_connect_irq(busdev, 1, cpu_pic1[ARM_PIC_CPU_FIQ]);
 
-    for (i = 0; i < 64; i++) {
-        gic_pic[i] = qdev_get_gpio_in(dev, i);
+    for (i = 32; i < 64; i++) {
+        gic_pic[i] = qdev_get_gpio_in(dev, i - 32);
     }
 
+    splitirq[0] = qemu_irq_split(gic_pic[36], cpu_pic0[ARM_PIC_CPU_FIQ]);
     dev = sysbus_create_varargs("ox820-rps-irq", 0x44400000,
                                 gic_pic[37],
-                                gic_pic[36], NULL);
+                                splitirq[0], NULL);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04400000);
     for (i = 0; i < 32; i++) {
         rpsa_pic[i] = qdev_get_gpio_in(dev, i);
     }
 
+    splitirq[0] = qemu_irq_split(gic_pic[34], cpu_pic1[ARM_PIC_CPU_FIQ]);
     dev = sysbus_create_varargs("ox820-rps-irq", 0x44500000,
                                 gic_pic[35],
-                                gic_pic[34], NULL);
+                                splitirq[0], NULL);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04500000);
     for (i = 0; i < 32; i++) {
         rpsc_pic[i] = qdev_get_gpio_in(dev, i);
     }
 
-    sysbus_create_simple("ox820-rps-timer", 0x44400200, rpsa_pic[4]);
-    sysbus_create_simple("ox820-rps-timer", 0x44400220, rpsa_pic[5]);
+    dev = sysbus_create_simple("ox820-rps-timer", 0x44400200, rpsa_pic[4]);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04400200);
+    dev = sysbus_create_simple("ox820-rps-timer", 0x44400220, rpsa_pic[5]);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04400220);
 
-    sysbus_create_simple("ox820-rps-timer", 0x44500200, rpsc_pic[4]);
-    sysbus_create_simple("ox820-rps-timer", 0x44500220, rpsc_pic[5]);
+    dev = sysbus_create_simple("ox820-rps-timer", 0x44500200, rpsc_pic[4]);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04500200);
+    dev = sysbus_create_simple("ox820-rps-timer", 0x44500220, rpsc_pic[5]);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04500220);
 
     if (serial_hds[0]) {
         splitirq[0] = qemu_irq_split(rpsa_pic[23], rpsc_pic[23]);
@@ -135,10 +143,12 @@ static void ox820_init(ram_addr_t ram_size,
 
     splitirq[0] = qemu_irq_split(rpsa_pic[22], rpsc_pic[22]);
     splitirq[0] = qemu_irq_split(gic_pic[53], splitirq[0]);
-    sysbus_create_simple("ox820-gpio", 0x44000000, splitirq[0]);
+    dev = sysbus_create_simple("ox820-gpio", 0x44000000, splitirq[0]);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04000000);
     splitirq[0] = qemu_irq_split(rpsa_pic[23], rpsc_pic[23]);
     splitirq[0] = qemu_irq_split(gic_pic[54], splitirq[0]);
-    sysbus_create_simple("ox820-gpio", 0x44100000, splitirq[0]);
+    dev = sysbus_create_simple("ox820-gpio", 0x44100000, splitirq[0]);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04100000);
 
     splitirq[0] = qemu_irq_split(rpsa_pic[10], rpsc_pic[10]);
     splitirq[0] = qemu_irq_split(gic_pic[42], splitirq[0]);
@@ -146,8 +156,16 @@ static void ox820_init(ram_addr_t ram_size,
     splitirq[1] = qemu_irq_split(gic_pic[43], splitirq[1]);
     splitirq[2] = qemu_irq_split(rpsa_pic[12], rpsc_pic[12]);
     splitirq[2] = qemu_irq_split(gic_pic[44], splitirq[2]);
-    sysbus_create_varargs("ox820-sysctrl", 0x44E00000, splitirq[0], splitirq[1], splitirq[2], NULL);
-    sysbus_create_simple("ox820-secctrl", 0x44F00000, NULL);
+    dev = sysbus_create_varargs("ox820-sysctrl", 0x44E00000, splitirq[0], splitirq[1], splitirq[2], NULL);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04E00000);
+    dev = sysbus_create_simple("ox820-secctrl", 0x44F00000, NULL);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04F00000);
+
+    dev = sysbus_create_simple("ox820-rps-misc", 0x444003C0, NULL);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x044003C0);
+
+    dev = sysbus_create_simple("ox820-rps-misc", 0x445003C0, NULL);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x045003C0);
 
     ox820_binfo.ram_size = ram_size;
     ox820_binfo.kernel_filename = kernel_filename;
