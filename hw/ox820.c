@@ -55,7 +55,9 @@ static void ox820_init(ram_addr_t ram_size,
     qemu_irq *cpu_pic1;
     DeviceState *dev;
     qemu_irq splitirq[3];
-    MemoryRegion* uarts_region = g_new(MemoryRegion, 1);
+    MemoryRegion* main_1gb_region = g_new(MemoryRegion, 1);
+    MemoryRegion* rpsa_region = g_new(MemoryRegion, 1);
+    MemoryRegion* rpsc_region = g_new(MemoryRegion, 1);
     int i;
 
     cpu_model = "arm11mpcore";
@@ -70,6 +72,17 @@ static void ox820_init(ram_addr_t ram_size,
         exit(1);
     }
 
+    memory_region_init(main_1gb_region, "main", 0x40000000);
+
+    memory_region_add_subregion(address_space_mem, 0x40000000, main_1gb_region);
+    ox820_add_mem_alias(main_1gb_region, "main.alias", 0x00000000, 0x40000000);
+
+    memory_region_init(rpsa_region, "rpsa", 0x100000);
+    memory_region_add_subregion(main_1gb_region, 0x04400000, rpsa_region);
+    memory_region_init(rpsc_region, "rpsc", 0x100000);
+    memory_region_add_subregion(main_1gb_region, 0x04500000, rpsc_region);
+
+
     memory_region_init_ram(scratch, "ox820.scratch", 65536);
     vmstate_register_ram_global(scratch);
     memory_region_init_ram(ram, "ox820.ram", ram_size);
@@ -77,14 +90,11 @@ static void ox820_init(ram_addr_t ram_size,
     memory_region_init_ram(rom, "ox820.rom", 32768);
     vmstate_register_ram_global(rom);
 
-    /* address range 0x40000000--0x40007FFF is occupied by a 32kB Boot Rom */
-    memory_region_add_subregion(address_space_mem, 0x40000000, rom);
-    ox820_add_mem_alias(ram, "ram.alias", 0x00000000, 32768);
-    /* address range 0x60000000--0x7FFFFFFF is SDRAM region */
-    memory_region_add_subregion(address_space_mem, 0x60000000, ram);
-    ox820_add_mem_alias(ram, "ram.alias", 0x20000000, ram_size);
-    memory_region_add_subregion(address_space_mem, 0x50000000, scratch);
-    ox820_add_mem_alias(scratch, "ram.alias", 0x10000000, 65536);
+    /* address range 0x00000000--0x00007FFF is occupied by a 32kB Boot Rom */
+    memory_region_add_subregion(main_1gb_region, 0x00000000, rom);
+    /* address range 0x20000000--0x2FFFFFFF is SDRAM region */
+    memory_region_add_subregion(main_1gb_region, 0x20000000, ram);
+    memory_region_add_subregion(main_1gb_region, 0x10000000, scratch);
 
     cpu_pic0 = arm_pic_init_cpu(env0);
     cpu_pic1 = arm_pic_init_cpu(env1);
@@ -94,7 +104,7 @@ static void ox820_init(ram_addr_t ram_size,
     qdev_prop_set_uint32(dev, "num-irq", 64);
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
-    sysbus_mmio_map(busdev, 0, 0x47000000);
+    memory_region_add_subregion(main_1gb_region, 0x07000000, sysbus_mmio_get_region(busdev, 0));
     sysbus_connect_irq(busdev, 0, cpu_pic0[ARM_PIC_CPU_FIQ]);
     sysbus_connect_irq(busdev, 1, cpu_pic1[ARM_PIC_CPU_FIQ]);
 
@@ -102,77 +112,130 @@ static void ox820_init(ram_addr_t ram_size,
         gic_pic[i] = qdev_get_gpio_in(dev, i - 32);
     }
 
+    /*=========================================================================*/
+    /* RPS-A/RPS-C */
     splitirq[0] = qemu_irq_split(gic_pic[36], cpu_pic0[ARM_PIC_CPU_FIQ]);
-    dev = sysbus_create_varargs("ox820-rps-irq", 0x44400000,
-                                gic_pic[37],
-                                splitirq[0], NULL);
-    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04400000);
+    dev = qdev_create(NULL, "ox820-rps-irq");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    sysbus_connect_irq(busdev, 0, gic_pic[37]);
+    sysbus_connect_irq(busdev, 1, splitirq[0]);
+    memory_region_add_subregion(rpsa_region, 0x00000000, sysbus_mmio_get_region(busdev, 0));
+
     for (i = 0; i < 32; i++) {
         rpsa_pic[i] = qdev_get_gpio_in(dev, i);
     }
 
     splitirq[0] = qemu_irq_split(gic_pic[34], cpu_pic1[ARM_PIC_CPU_FIQ]);
-    dev = sysbus_create_varargs("ox820-rps-irq", 0x44500000,
-                                gic_pic[35],
-                                splitirq[0], NULL);
-    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04500000);
+    dev = qdev_create(NULL, "ox820-rps-irq");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    sysbus_connect_irq(busdev, 0, gic_pic[35]);
+    sysbus_connect_irq(busdev, 1, splitirq[0]);
+    memory_region_add_subregion(rpsc_region, 0x00000000, sysbus_mmio_get_region(busdev, 0));
+
     for (i = 0; i < 32; i++) {
         rpsc_pic[i] = qdev_get_gpio_in(dev, i);
     }
 
-    dev = sysbus_create_simple("ox820-rps-timer", 0x44400200, rpsa_pic[4]);
-    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04400200);
-    dev = sysbus_create_simple("ox820-rps-timer", 0x44400220, rpsa_pic[5]);
-    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04400220);
+    dev = qdev_create(NULL, "ox820-rps-timer");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    sysbus_connect_irq(busdev, 0, rpsa_pic[4]);
+    memory_region_add_subregion(rpsa_region, 0x00000200, sysbus_mmio_get_region(busdev, 0));
 
-    dev = sysbus_create_simple("ox820-rps-timer", 0x44500200, rpsc_pic[4]);
-    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04500200);
-    dev = sysbus_create_simple("ox820-rps-timer", 0x44500220, rpsc_pic[5]);
-    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04500220);
+    dev = qdev_create(NULL, "ox820-rps-timer");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    sysbus_connect_irq(busdev, 0, rpsa_pic[5]);
+    memory_region_add_subregion(rpsa_region, 0x00000220, sysbus_mmio_get_region(busdev, 0));
 
-    dev = sysbus_create_simple("ox820-static", 0x41C00000, NULL);
-    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x01C00000);
+    dev = qdev_create(NULL, "ox820-rps-timer");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    sysbus_connect_irq(busdev, 0, rpsc_pic[4]);
+    memory_region_add_subregion(rpsc_region, 0x00000200, sysbus_mmio_get_region(busdev, 0));
 
-    memory_region_init(uarts_region, "uarts", 0x200000);
+    dev = qdev_create(NULL, "ox820-rps-timer");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    sysbus_connect_irq(busdev, 0, rpsc_pic[5]);
+    memory_region_add_subregion(rpsc_region, 0x00000220, sysbus_mmio_get_region(busdev, 0));
+
+    dev = qdev_create(NULL, "ox820-rps-misc");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(rpsa_region, 0x000003C0, sysbus_mmio_get_region(busdev, 0));
+
+    dev = qdev_create(NULL, "ox820-rps-misc");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(rpsc_region, 0x000003C0, sysbus_mmio_get_region(busdev, 0));
+
+    /*=========================================================================*/
+    /* STATIC */
+    dev = qdev_create(NULL, "ox820-static");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(main_1gb_region, 0x01C00000, sysbus_mmio_get_region(busdev, 0));
+
+    /*=========================================================================*/
+    /* UARTs */
     if (serial_hds[0]) {
         splitirq[0] = qemu_irq_split(rpsa_pic[23], rpsc_pic[23]);
         splitirq[0] = qemu_irq_split(gic_pic[55], splitirq[0]);
-        serial_mm_init(uarts_region, 0x00000000, 0, splitirq[0], 6250000/16,
+        serial_mm_init(main_1gb_region, 0x04200000, 0, splitirq[0], 6250000/16,
                        serial_hds[0], DEVICE_NATIVE_ENDIAN);
     }
     if (serial_hds[1]) {
         splitirq[0] = qemu_irq_split(rpsa_pic[24], rpsc_pic[24]);
         splitirq[0] = qemu_irq_split(gic_pic[56], splitirq[0]);
-        serial_mm_init(uarts_region, 0x00100000, 0, splitirq[0], 6250000/16,
+        serial_mm_init(main_1gb_region, 0x04300000, 0, splitirq[0], 6250000/16,
                        serial_hds[1], DEVICE_NATIVE_ENDIAN);
     }
-    memory_region_add_subregion(address_space_mem, 0x44200000, uarts_region);
-    ox820_add_mem_alias(uarts_region, "uarts.alias", 0x04200000, 0x200000);
+
+    /*=========================================================================*/
+    /* GPIOA */
     splitirq[0] = qemu_irq_split(rpsa_pic[22], rpsc_pic[22]);
     splitirq[0] = qemu_irq_split(gic_pic[53], splitirq[0]);
-    dev = sysbus_create_simple("ox820-gpio", 0x44000000, splitirq[0]);
-    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04000000);
+    dev = qdev_create(NULL, "ox820-gpio");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    sysbus_connect_irq(busdev, 0, splitirq[0]);
+    memory_region_add_subregion(main_1gb_region, 0x04000000, sysbus_mmio_get_region(busdev, 0));
+
+    /*=========================================================================*/
+    /* GPIOB */
     splitirq[0] = qemu_irq_split(rpsa_pic[23], rpsc_pic[23]);
     splitirq[0] = qemu_irq_split(gic_pic[54], splitirq[0]);
-    dev = sysbus_create_simple("ox820-gpio", 0x44100000, splitirq[0]);
-    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04100000);
+    dev = qdev_create(NULL, "ox820-gpio");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    sysbus_connect_irq(busdev, 0, splitirq[0]);
+    memory_region_add_subregion(main_1gb_region, 0x04100000, sysbus_mmio_get_region(busdev, 0));
 
+    /*=========================================================================*/
+    /* SYSCTRL */
     splitirq[0] = qemu_irq_split(rpsa_pic[10], rpsc_pic[10]);
     splitirq[0] = qemu_irq_split(gic_pic[42], splitirq[0]);
     splitirq[1] = qemu_irq_split(rpsa_pic[11], rpsc_pic[11]);
     splitirq[1] = qemu_irq_split(gic_pic[43], splitirq[1]);
     splitirq[2] = qemu_irq_split(rpsa_pic[12], rpsc_pic[12]);
     splitirq[2] = qemu_irq_split(gic_pic[44], splitirq[2]);
-    dev = sysbus_create_varargs("ox820-sysctrl", 0x44E00000, splitirq[0], splitirq[1], splitirq[2], NULL);
-    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04E00000);
-    dev = sysbus_create_simple("ox820-secctrl", 0x44F00000, NULL);
-    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04F00000);
+    dev = qdev_create(NULL, "ox820-sysctrl");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    sysbus_connect_irq(busdev, 0, splitirq[0]);
+    sysbus_connect_irq(busdev, 1, splitirq[1]);
+    sysbus_connect_irq(busdev, 2, splitirq[2]);
+    memory_region_add_subregion(main_1gb_region, 0x04E00000, sysbus_mmio_get_region(busdev, 0));
 
-    dev = sysbus_create_simple("ox820-rps-misc", 0x444003C0, NULL);
-    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x044003C0);
-
-    dev = sysbus_create_simple("ox820-rps-misc", 0x445003C0, NULL);
-    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x045003C0);
+    /*=========================================================================*/
+    /* SECCTRL */
+    dev = qdev_create(NULL, "ox820-secctrl");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(main_1gb_region, 0x04F00000, sysbus_mmio_get_region(busdev, 0));
 
     ox820_binfo.ram_size = ram_size;
     ox820_binfo.kernel_filename = kernel_filename;
