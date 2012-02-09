@@ -17,13 +17,39 @@
 #include "net.h"
 #include "exec-memory.h"
 #include "sysemu.h"
+#include "loader.h"
 
 /* Board init.  */
 
+static uint32_t smpboot[] = {
+  0xe3a0064e, /* mov r0, #0x04e00000 */
+  0xe59040c4, /* loop: ldr r4, [r0, #0xc4] */
+  0xe3340000, /* teq r4, #0 */
+  0x0afffffc, /* beq loop */
+  0xe590f0c8, /* ldr pc, [r0, #0x200] */
+};
+
+static void ox820_write_secondary(CPUState *env,
+                                  const struct arm_boot_info *info)
+{
+    int n;
+    for (n = 0; n < ARRAY_SIZE(smpboot); n++) {
+        smpboot[n] = tswap32(smpboot[n]);
+    }
+    rom_add_blob_fixed("smpboot", smpboot, sizeof(smpboot),
+                       0x8000);
+}
+
+static void ox820_reset_secondary(CPUState *env,
+                                  const struct arm_boot_info *info)
+{
+    env->regs[15] = 0x8000;
+}
+
 static struct arm_boot_info ox820_binfo = {
     .loader_start = 0x60000000,
-    .smp_loader_start = 0x00000000,
-    .smp_priv_base = 0x47000000,
+    .write_secondary_boot = ox820_write_secondary,
+    .secondary_cpu_reset_hook = ox820_reset_secondary
 };
 
 static void ox820_add_mem_alias(MemoryRegion* aliasedregion, const char* name, target_phys_addr_t tgt, uint64_t size)
@@ -39,7 +65,7 @@ static void ox820_init(ram_addr_t ram_size,
                      const char *kernel_filename, const char *kernel_cmdline,
                      const char *initrd_filename, const char *cpu_model)
 {
-    int num_cpus = 1; /* 1, 2 */
+    int num_cpus = 2; /* 1, 2 */
     CPUState *env0;
     CPUState *env1;
     //CPUState* leon;
@@ -59,6 +85,7 @@ static void ox820_init(ram_addr_t ram_size,
     MemoryRegion* rpsa_region = g_new(MemoryRegion, 1);
     MemoryRegion* rpsc_region = g_new(MemoryRegion, 1);
     MemoryRegion* sysctrl_region = g_new(MemoryRegion, 1);
+    MemoryRegion* smpboot_ram = g_new(MemoryRegion, 1);
     int i;
 
     cpu_model = "arm11mpcore";
@@ -93,9 +120,10 @@ static void ox820_init(ram_addr_t ram_size,
     vmstate_register_ram_global(ram);
     memory_region_init_ram(rom, "ox820.rom", 32768);
     vmstate_register_ram_global(rom);
+    memory_region_init_ram(smpboot_ram, "smpboot", 0x100);
 
     /* address range 0x00008000--0x0000801F is not used on real ox820 */
-
+    memory_region_add_subregion(main_1gb_region, 0x00008000, smpboot_ram);
     /* address range 0x00000000--0x00007FFF is occupied by a 32kB Boot Rom */
     memory_region_add_subregion(main_1gb_region, 0x00000000, rom);
     /* address range 0x20000000--0x2FFFFFFF is SDRAM region */
@@ -286,6 +314,7 @@ static void ox820_init(ram_addr_t ram_size,
 
     memory_region_add_subregion(address_space_mem, 0x00000000, main_1gb_region);
     ox820_add_mem_alias(main_1gb_region, "main.alias", 0x40000000, 0x40000000);
+
 
 
     ox820_binfo.ram_size = ram_size;

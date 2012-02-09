@@ -22,7 +22,6 @@ static uint64_t ox820_static_read(void *opaque, target_phys_addr_t offset,
     ox820_static_state *s = (ox820_static_state *)opaque;
     uint32_t c = 0;
 
-    offset -= s->iomem.addr;
     switch (offset >> 2) {
     case 0x0000 >> 2:
         c = 2;
@@ -59,7 +58,6 @@ static void ox820_static_write(void *opaque, target_phys_addr_t offset,
 {
     ox820_static_state *s = (ox820_static_state *)opaque;
 
-    offset -= s->iomem.addr;
     switch(offset >> 2) {
 
     case 0x0004 >> 2:
