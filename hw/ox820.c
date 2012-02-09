@@ -22,9 +22,8 @@
 
 static struct arm_boot_info ox820_binfo = {
     .loader_start = 0x60000000,
-    .smp_loader_start = 0x04E000C4,
-    .smp_bootreg_addr = 0x04E000C8,
-    .smp_priv_base = 0x70000000,
+    .smp_loader_start = 0x00008000, /* point at smpboot-emu.rom */
+    .smp_priv_base = 0x47000000,
 };
 
 static void ox820_add_mem_alias(MemoryRegion* aliasedregion, const char* name, target_phys_addr_t tgt, uint64_t size)
@@ -34,6 +33,47 @@ static void ox820_add_mem_alias(MemoryRegion* aliasedregion, const char* name, t
     memory_region_add_subregion(get_system_memory(), tgt, alias);
 
 }
+
+static uint64_t ox820_smpboot_read(void *opaque, target_phys_addr_t offset,
+                           unsigned size)
+{
+    uint32_t c = 0;
+
+    switch (offset >> 2) {
+    case 0x0000 >> 2:
+        c = 0xe3a0064e;
+        break;
+
+    case 0x0004 >> 2:
+        c = 0xe59040c4;
+        break;
+
+    case 0x0008 >> 2:
+        c = 0xe3340000;
+        break;
+
+    case 0x000C >> 2:
+        c = 0x0afffffc;
+        break;
+
+    case 0x0010 >> 2:
+        c = 0xe590f0c8;
+        break;
+
+    default:
+        return 0;
+    }
+    return c;
+}
+
+
+static MemoryRegionOps smpboot_ops =
+{
+ .read = ox820_smpboot_read,
+ .write = NULL,
+ .endianness = DEVICE_NATIVE_ENDIAN,
+
+};
 
 static void ox820_init(ram_addr_t ram_size,
                      const char *boot_device,
@@ -58,6 +98,8 @@ static void ox820_init(ram_addr_t ram_size,
     MemoryRegion* main_1gb_region = g_new(MemoryRegion, 1);
     MemoryRegion* rpsa_region = g_new(MemoryRegion, 1);
     MemoryRegion* rpsc_region = g_new(MemoryRegion, 1);
+    MemoryRegion* sysctrl_region = g_new(MemoryRegion, 1);
+    MemoryRegion* smpboot_emu_region = g_new(MemoryRegion, 1);
     int i;
 
     cpu_model = "arm11mpcore";
@@ -66,6 +108,7 @@ static void ox820_init(ram_addr_t ram_size,
         fprintf(stderr, "Unable to find CPU definition\n");
         exit(1);
     }
+
     env1 = cpu_init(cpu_model);
     if(!env1) {
         fprintf(stderr, "Unable to find CPU definition\n");
@@ -77,10 +120,12 @@ static void ox820_init(ram_addr_t ram_size,
     memory_region_add_subregion(address_space_mem, 0x40000000, main_1gb_region);
     ox820_add_mem_alias(main_1gb_region, "main.alias", 0x00000000, 0x40000000);
 
-    memory_region_init(rpsa_region, "rpsa", 0x100000);
+    memory_region_init(rpsa_region, "ox820-rpsa", 0x100000);
     memory_region_add_subregion(main_1gb_region, 0x04400000, rpsa_region);
-    memory_region_init(rpsc_region, "rpsc", 0x100000);
+    memory_region_init(rpsc_region, "ox820-rpsc", 0x100000);
     memory_region_add_subregion(main_1gb_region, 0x04500000, rpsc_region);
+    memory_region_init(sysctrl_region, "ox820-sysctrl", 0x100000);
+    memory_region_add_subregion(main_1gb_region, 0x04E00000, sysctrl_region);
 
 
     memory_region_init_ram(scratch, "ox820.scratch", 65536);
@@ -89,6 +134,10 @@ static void ox820_init(ram_addr_t ram_size,
     vmstate_register_ram_global(ram);
     memory_region_init_ram(rom, "ox820.rom", 32768);
     vmstate_register_ram_global(rom);
+
+    /* address range 0x00008000--0x0000801F is not used on real ox820 */
+    memory_region_init_rom_device(smpboot_emu_region, &smpboot_ops, NULL, "ox820.emu.smpboot", 0x20);
+    memory_region_add_subregion(main_1gb_region, 0x00008000, smpboot_emu_region);
 
     /* address range 0x00000000--0x00007FFF is occupied by a 32kB Boot Rom */
     memory_region_add_subregion(main_1gb_region, 0x00000000, rom);
@@ -222,13 +271,40 @@ static void ox820_init(ram_addr_t ram_size,
     splitirq[1] = qemu_irq_split(gic_pic[43], splitirq[1]);
     splitirq[2] = qemu_irq_split(rpsa_pic[12], rpsc_pic[12]);
     splitirq[2] = qemu_irq_split(gic_pic[44], splitirq[2]);
-    dev = qdev_create(NULL, "ox820-sysctrl");
+    dev = qdev_create(NULL, "ox820-sysctrl-sema");
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
     sysbus_connect_irq(busdev, 0, splitirq[0]);
     sysbus_connect_irq(busdev, 1, splitirq[1]);
     sysbus_connect_irq(busdev, 2, splitirq[2]);
-    memory_region_add_subregion(main_1gb_region, 0x04E00000, sysbus_mmio_get_region(busdev, 0));
+    memory_region_add_subregion(sysctrl_region, 0x0000004C, sysbus_mmio_get_region(busdev, 0));
+
+    dev = qdev_create(NULL, "ox820-sysctrl-rstck");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(sysctrl_region, 0x00000024, sysbus_mmio_get_region(busdev, 0));
+
+    dev = qdev_create(NULL, "ox820-sysctrl-plla");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(sysctrl_region, 0x000001F0, sysbus_mmio_get_region(busdev, 0));
+
+    dev = qdev_create(NULL, "ox820-sysctrl-mfa");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(sysctrl_region, 0x00000014, sysbus_mmio_get_region(busdev, 0));
+    memory_region_add_subregion(sysctrl_region, 0x0000008C, sysbus_mmio_get_region(busdev, 1));
+    memory_region_add_subregion(sysctrl_region, 0x00000094, sysbus_mmio_get_region(busdev, 2));
+
+    dev = qdev_create(NULL, "ox820-sysctrl-ref300");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(sysctrl_region, 0x000000F8, sysbus_mmio_get_region(busdev, 0));
+
+    dev = qdev_create(NULL, "ox820-sysctrl-scratchword");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(sysctrl_region, 0x000000C4, sysbus_mmio_get_region(busdev, 0));
 
     /*=========================================================================*/
     /* SECCTRL */
