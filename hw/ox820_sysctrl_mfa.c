@@ -27,6 +27,7 @@ static uint64_t ox820_sysctrl_mfa0_read(void *opaque, target_phys_addr_t offset,
     ox820_sysctrl_mfa_state *s = (ox820_sysctrl_mfa_state *)opaque;
     uint32_t c = 0;
 
+    offset -= s->iomem0.addr;
     switch (offset >> 2) {
     case 0x0000 >> 2:
         c = s->mfa_secsel_ctrl;
@@ -43,6 +44,7 @@ static void ox820_sysctrl_mfa0_write(void *opaque, target_phys_addr_t offset,
 {
     ox820_sysctrl_mfa_state *s = (ox820_sysctrl_mfa_state *)opaque;
 
+    offset -= s->iomem0.addr;
     switch(offset >> 2) {
     case 0x0000 >> 2:
         s->mfa_secsel_ctrl = value;
@@ -65,6 +67,7 @@ static uint64_t ox820_sysctrl_mfa1_read(void *opaque, target_phys_addr_t offset,
     ox820_sysctrl_mfa_state *s = (ox820_sysctrl_mfa_state *)opaque;
     uint32_t c = 0;
 
+    offset -= s->iomem1.addr;
     switch (offset >> 2) {
     case 0x0000 >> 2:
         c = s->mfa_tersel_ctrl;
@@ -81,6 +84,7 @@ static void ox820_sysctrl_mfa1_write(void *opaque, target_phys_addr_t offset,
 {
     ox820_sysctrl_mfa_state *s = (ox820_sysctrl_mfa_state *)opaque;
 
+    offset -= s->iomem1.addr;
     switch(offset >> 2) {
     case 0x0000 >> 2:
         s->mfa_tersel_ctrl = value;
@@ -103,6 +107,7 @@ static uint64_t ox820_sysctrl_mfa2_read(void *opaque, target_phys_addr_t offset,
     ox820_sysctrl_mfa_state *s = (ox820_sysctrl_mfa_state *)opaque;
     uint32_t c = 0;
 
+    offset -= s->iomem2.addr;
     switch (offset >> 2) {
     case 0x0000 >> 2:
         c = s->mfa_quatsel_ctrl;
@@ -131,6 +136,7 @@ static void ox820_sysctrl_mfa2_write(void *opaque, target_phys_addr_t offset,
 {
     ox820_sysctrl_mfa_state *s = (ox820_sysctrl_mfa_state *)opaque;
 
+    offset -= s->iomem2.addr;
     switch(offset >> 2) {
     case 0x0000 >> 2:
         s->mfa_quatsel_ctrl = value;

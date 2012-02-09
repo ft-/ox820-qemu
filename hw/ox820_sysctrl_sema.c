@@ -34,6 +34,7 @@ static uint64_t ox820_sysctrl_sema_read(void *opaque, target_phys_addr_t offset,
     ox820_sysctrl_sema_state *s = (ox820_sysctrl_sema_state *)opaque;
     uint32_t c = 0;
 
+    offset -= s->iomem.addr;
     switch (offset >> 2) {
     case 0x0000 >> 2:
         c = s->sema_stat;
@@ -62,6 +63,7 @@ static void ox820_sysctrl_sema_write(void *opaque, target_phys_addr_t offset,
 {
     ox820_sysctrl_sema_state *s = (ox820_sysctrl_sema_state *)opaque;
 
+    offset -= s->iomem.addr;
     switch(offset >> 2) {
     case 0x0004 >> 2:
         s->sema_stat |= value;

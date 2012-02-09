@@ -36,6 +36,7 @@ static uint64_t ox820_secctrl_read(void *opaque, target_phys_addr_t offset,
     ox820_secctrl_state *s = (ox820_secctrl_state *)opaque;
     uint32_t c = 0;
 
+    offset -= s->iomem.addr;
     switch (offset >> 2) {
     case 0x0014 >> 2:
         c = s->mfb_secsel_ctrl;
@@ -112,6 +113,7 @@ static void ox820_secctrl_write(void *opaque, target_phys_addr_t offset,
 {
     ox820_secctrl_state *s = (ox820_secctrl_state *)opaque;
 
+    offset -= s->iomem.addr;
     switch(offset >> 2) {
     case 0x0014 >> 2:
         s->mfb_secsel_ctrl = value;

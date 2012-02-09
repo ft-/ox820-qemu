@@ -21,6 +21,7 @@ static uint64_t ox820_sysctrl_rstck_read(void *opaque, target_phys_addr_t offset
     ox820_sysctrl_rstck_state *s = (ox820_sysctrl_rstck_state *)opaque;
     uint32_t c = 0;
 
+    offset -= s->iomem.addr;
     switch (offset >> 2) {
     case 0x0000 >> 2:
         c = s->cken_stat;
@@ -41,6 +42,7 @@ static void ox820_sysctrl_rstck_write(void *opaque, target_phys_addr_t offset,
 {
     ox820_sysctrl_rstck_state *s = (ox820_sysctrl_rstck_state *)opaque;
 
+    offset -= s->iomem.addr;
     switch(offset >> 2) {
     case 0x0008 >> 2:
         s->cken_stat |= value;

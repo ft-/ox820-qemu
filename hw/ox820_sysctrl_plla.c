@@ -23,6 +23,7 @@ static uint64_t ox820_sysctrl_plla_read(void *opaque, target_phys_addr_t offset,
     ox820_sysctrl_plla_state *s = (ox820_sysctrl_plla_state *)opaque;
     uint32_t c = 0;
 
+    offset -= s->iomem.addr;
     switch (offset >> 2) {
     case 0x0000 >> 2:
         c = s->plla_ctrl0;
@@ -51,6 +52,7 @@ static void ox820_sysctrl_plla_write(void *opaque, target_phys_addr_t offset,
 {
     ox820_sysctrl_plla_state *s = (ox820_sysctrl_plla_state *)opaque;
 
+    offset -= s->iomem.addr;
     switch(offset >> 2) {
     case 0x0000 >> 2:
         s->plla_ctrl0 = value;

@@ -20,6 +20,7 @@ static uint64_t ox820_sysctrl_scratchword_read(void *opaque, target_phys_addr_t 
     ox820_sysctrl_scratchword_state *s = (ox820_sysctrl_scratchword_state *)opaque;
     uint32_t c = 0;
 
+    offset -= s->iomem.addr;
     switch (offset >> 2) {
     case 0x0000 >> 2:
         c = s->scratchword[0];
@@ -48,12 +49,14 @@ static void ox820_sysctrl_scratchword_write(void *opaque, target_phys_addr_t off
 {
     ox820_sysctrl_scratchword_state *s = (ox820_sysctrl_scratchword_state *)opaque;
 
+    offset -= s->iomem.addr;
     switch(offset >> 2) {
     case 0x0000 >> 2:
         s->scratchword[0] = value;
         break;
 
     case 0x0004 >> 2:
+        printf("Holding Pen Location written with %u\n", (uint32_t) value);
         s->scratchword[1] = value;
         break;
 
