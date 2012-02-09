@@ -55,6 +55,7 @@ static void ox820_init(ram_addr_t ram_size,
     qemu_irq *cpu_pic1;
     DeviceState *dev;
     qemu_irq splitirq[3];
+    MemoryRegion* uarts_region = g_new(MemoryRegion, 1);
     int i;
 
     cpu_model = "arm11mpcore";
@@ -68,6 +69,7 @@ static void ox820_init(ram_addr_t ram_size,
         fprintf(stderr, "Unable to find CPU definition\n");
         exit(1);
     }
+
     memory_region_init_ram(scratch, "ox820.scratch", 65536);
     vmstate_register_ram_global(scratch);
     memory_region_init_ram(ram, "ox820.ram", ram_size);
@@ -128,19 +130,24 @@ static void ox820_init(ram_addr_t ram_size,
     dev = sysbus_create_simple("ox820-rps-timer", 0x44500220, rpsc_pic[5]);
     sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x04500220);
 
+    dev = sysbus_create_simple("ox820-static", 0x41C00000, NULL);
+    sysbus_mmio_map(sysbus_from_qdev(dev), 0, 0x01C00000);
+
+    memory_region_init(uarts_region, "uarts", 0x200000);
     if (serial_hds[0]) {
         splitirq[0] = qemu_irq_split(rpsa_pic[23], rpsc_pic[23]);
         splitirq[0] = qemu_irq_split(gic_pic[55], splitirq[0]);
-        serial_mm_init(address_space_mem, 0x44200000, 0, splitirq[0], 6250000/16,
+        serial_mm_init(uarts_region, 0x00000000, 0, splitirq[0], 6250000/16,
                        serial_hds[0], DEVICE_NATIVE_ENDIAN);
     }
     if (serial_hds[1]) {
         splitirq[0] = qemu_irq_split(rpsa_pic[24], rpsc_pic[24]);
         splitirq[0] = qemu_irq_split(gic_pic[56], splitirq[0]);
-        serial_mm_init(address_space_mem, 0x44300000, 0, splitirq[0], 6250000/16,
+        serial_mm_init(uarts_region, 0x00100000, 0, splitirq[0], 6250000/16,
                        serial_hds[1], DEVICE_NATIVE_ENDIAN);
     }
-
+    memory_region_add_subregion(address_space_mem, 0x44200000, uarts_region);
+    ox820_add_mem_alias(uarts_region, "uarts.alias", 0x04200000, 0x200000);
     splitirq[0] = qemu_irq_split(rpsa_pic[22], rpsc_pic[22]);
     splitirq[0] = qemu_irq_split(gic_pic[53], splitirq[0]);
     dev = sysbus_create_simple("ox820-gpio", 0x44000000, splitirq[0]);
