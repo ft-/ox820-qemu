@@ -29,6 +29,10 @@ static uint32_t smpboot[] = {
   0xe590f0c8, /* ldr pc, [r0, #0x200] */
 };
 
+static uint32_t emptyboot[] = {
+  0xbffffffe
+};
+
 static void ox820_write_secondary(CPUState *env,
                                   const struct arm_boot_info *info)
 {
@@ -316,6 +320,11 @@ static void ox820_init(ram_addr_t ram_size,
     ox820_add_mem_alias(main_1gb_region, "main.alias", 0x40000000, 0x40000000);
 
 
+    for (i = 0; i < ARRAY_SIZE(emptyboot); i++) {
+        emptyboot[i] = tswap32(emptyboot[i]);
+    }
+    rom_add_blob_fixed("emptyboot", emptyboot, sizeof(emptyboot),
+                       0x0000);
 
     ox820_binfo.ram_size = ram_size;
     ox820_binfo.kernel_filename = kernel_filename;
