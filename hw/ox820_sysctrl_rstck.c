@@ -13,7 +13,22 @@ typedef struct {
     MemoryRegion    iomem;
     uint32_t        cken_stat;
     uint32_t        rsten_stat;
+    qemu_irq        cken_out[32];
+    qemu_irq        rsten_out[32];
 } ox820_sysctrl_rstck_state;
+
+static void ox820_sysctrl_rstck_update(ox820_sysctrl_rstck_state* s)
+{
+    unsigned int n;
+    for(n = 0; n < 32; ++n)
+    {
+        qemu_set_irq(s->cken_out[n], 0 != (s->cken_stat & (1u << n)));
+    }
+    for(n = 0; n < 32; ++n)
+    {
+        qemu_set_irq(s->rsten_out[n], 0 != (s->rsten_stat & (1u << n)));
+    }
+}
 
 static uint64_t ox820_sysctrl_rstck_read(void *opaque, target_phys_addr_t offset,
                            unsigned size)
@@ -46,18 +61,22 @@ static void ox820_sysctrl_rstck_write(void *opaque, target_phys_addr_t offset,
     switch(offset >> 2) {
     case 0x0008 >> 2:
         s->cken_stat |= value;
+        ox820_sysctrl_rstck_update(s);
         break;
 
     case 0x000C >> 2:
         s->cken_stat &= (~value);
+        ox820_sysctrl_rstck_update(s);
         break;
 
     case 0x0010 >> 2:
         s->rsten_stat |= value; /* TODO: how to pass on reset from here */
+        ox820_sysctrl_rstck_update(s);
         break;
 
     case 0x0014 >> 2:
         s->rsten_stat &= (~value);
+        ox820_sysctrl_rstck_update(s);
         break;
 
     default:
@@ -71,6 +90,8 @@ static void ox820_sysctrl_rstck_reset(DeviceState *d)
 
     s->cken_stat = 0x10000;
     s->rsten_stat = 0x8FFEFFF2;
+
+    ox820_sysctrl_rstck_update(s);
 }
 
 static const MemoryRegionOps ox820_sysctrl_rstck_ops = {
@@ -94,12 +115,24 @@ static const VMStateDescription vmstate_ox820_sysctrl_rstck = {
 static int ox820_sysctrl_rstck_init(SysBusDevice *dev)
 {
     ox820_sysctrl_rstck_state *s = FROM_SYSBUS(ox820_sysctrl_rstck_state, dev);
+    unsigned int n;
 
     memory_region_init_io(&s->iomem, &ox820_sysctrl_rstck_ops, s, "ox820-sysctrl-rstck", 0x18);
     sysbus_init_mmio(dev, &s->iomem);
 
+    for(n = 0; n < 32; ++n)
+    {
+        sysbus_init_irq(dev, &s->rsten_out[n]);
+    }
+
+    for(n = 0; n < 32; ++n)
+    {
+        sysbus_init_irq(dev, &s->cken_out[n]);
+    }
+
     s->cken_stat = 0x10000;
     s->rsten_stat = 0x8FFEFFF2;
+    ox820_sysctrl_rstck_update(s);
 
     vmstate_register(&dev->qdev, -1, &vmstate_ox820_sysctrl_rstck, s);
     return 0;

@@ -31,11 +31,15 @@ typedef struct {
     uint32_t        pwm_rr[32];
 
     qemu_irq        irq;
+    qemu_irq        gpio_out[32];
+    uint32_t        num_gpio;
 } ox820_gpio_state;
 
 static void ox820_gpio_irq_update(ox820_gpio_state* s)
 {
     int irqset = 0;
+    unsigned int n;
+    uint32_t gpio_out = s->output_enable & s->output;
     if(s->rising_edge_irq_events & s->rising_edge_irq_enable)
     {
         irqset = 1;
@@ -45,6 +49,10 @@ static void ox820_gpio_irq_update(ox820_gpio_state* s)
         irqset = 1;
     }
     qemu_set_irq(s->irq, irqset);
+    for(n = 0; n < s->num_gpio; ++n)
+    {
+        qemu_set_irq(s->gpio_out[n], 0 != (gpio_out & (1u << n)));
+    }
 }
 
 static uint64_t ox820_gpio_read(void *opaque, target_phys_addr_t offset,
@@ -155,6 +163,7 @@ static void ox820_gpio_write(void *opaque, target_phys_addr_t offset,
     switch (offset >> 2) {
     case 0x0004 >> 2:
         s->output_enable = value;
+        ox820_gpio_irq_update(s);
         break;
 
     case 0x0008 >> 2:
@@ -170,22 +179,27 @@ static void ox820_gpio_write(void *opaque, target_phys_addr_t offset,
 
     case 0x0010 >> 2:
         s->output = value;
+        ox820_gpio_irq_update(s);
         break;
 
     case 0x0014 >> 2:
         s->output |= value;
+        ox820_gpio_irq_update(s);
         break;
 
     case 0x0018 >> 2:
         s->output &= (~value);
+        ox820_gpio_irq_update(s);
         break;
 
     case 0x001C >> 2:
         s->output_enable |= value;
+        ox820_gpio_irq_update(s);
         break;
 
     case 0x0020 >> 2:
         s->output_enable &= (~value);
+        ox820_gpio_irq_update(s);
         break;
 
     case 0x0024 >> 2:
@@ -348,7 +362,16 @@ static int ox820_gpio_init(SysBusDevice *dev)
     memory_region_init_io(&s->iomem, &ox820_gpio_ops, s, "ox820-gpio", 0x10000);
     sysbus_init_mmio(dev, &s->iomem);
     sysbus_init_irq(dev, &s->irq);
-    qdev_init_gpio_in(&dev->qdev, ox820_gpio_set, 32);
+    if(s->num_gpio > 32)
+    {
+        s->num_gpio = 32;
+    }
+    qdev_init_gpio_in(&dev->qdev, ox820_gpio_set, s->num_gpio);
+    for(i = 0; i < s->num_gpio; ++i)
+    {
+        sysbus_init_irq(dev, &s->gpio_out[i]);
+    }
+
 
     s->output_enable = 0;
     s->irq_enable_mask = 0;
@@ -376,6 +399,12 @@ static int ox820_gpio_init(SysBusDevice *dev)
     return 0;
 }
 
+static Property ox820_gpio_properties[] = {
+    DEFINE_PROP_UINT32("num-gpio", ox820_gpio_state, num_gpio, 32),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
+
 static void ox820_gpio_class_init(ObjectClass *klass, void *data)
 {
     SysBusDeviceClass *sdc = SYS_BUS_DEVICE_CLASS(klass);
@@ -384,6 +413,7 @@ static void ox820_gpio_class_init(ObjectClass *klass, void *data)
     dc->no_user = 1;
     sdc->init = ox820_gpio_init;
     dc->reset = ox820_gpio_reset;
+    dc->props = ox820_gpio_properties;
 }
 
 static TypeInfo ox820_gpio_info = {

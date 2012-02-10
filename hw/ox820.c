@@ -251,6 +251,7 @@ static void ox820_init(ram_addr_t ram_size,
     splitirq[0] = qemu_irq_split(rpsa_pic[22], rpsc_pic[22]);
     splitirq[0] = qemu_irq_split(gic_pic[53], splitirq[0]);
     dev = qdev_create(NULL, "ox820-gpio");
+    qdev_prop_set_uint32(dev, "num-gpio", 32);
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
     sysbus_connect_irq(busdev, 0, splitirq[0]);
@@ -261,6 +262,7 @@ static void ox820_init(ram_addr_t ram_size,
     splitirq[0] = qemu_irq_split(rpsa_pic[23], rpsc_pic[23]);
     splitirq[0] = qemu_irq_split(gic_pic[54], splitirq[0]);
     dev = qdev_create(NULL, "ox820-gpio");
+    qdev_prop_set_uint32(dev, "num-gpio", 18);
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
     sysbus_connect_irq(busdev, 0, splitirq[0]);
