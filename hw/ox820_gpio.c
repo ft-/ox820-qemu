@@ -372,7 +372,6 @@ static int ox820_gpio_init(SysBusDevice *dev)
         sysbus_init_irq(dev, &s->gpio_out[i]);
     }
 
-
     s->output_enable = 0;
     s->irq_enable_mask = 0;
     s->irq_event = 0;
