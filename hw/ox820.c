@@ -319,7 +319,15 @@ static void ox820_init(ram_addr_t ram_size,
     memory_region_add_subregion(address_space_mem, 0x00000000, main_1gb_region);
     ox820_add_mem_alias(main_1gb_region, "main.alias", 0x40000000, 0x40000000);
 
+    /*=========================================================================*/
+    /* SECCTRL */
+    dev = qdev_create(NULL, "ox820-nand");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(main_1gb_region, 0x01000000, sysbus_mmio_get_region(busdev, 0));
 
+    /*=========================================================================*/
+    /* Boot Config */
     for (i = 0; i < ARRAY_SIZE(emptyboot); i++) {
         emptyboot[i] = tswap32(emptyboot[i]);
     }
