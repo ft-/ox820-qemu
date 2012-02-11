@@ -192,7 +192,6 @@ static void ox820_init(ram_addr_t ram_size,
     }
 
     dev = qdev_create(NULL, "ox820-rps-timer");
-    qdev_prop_set_uint32(dev, "timer-control", 0x80);
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
     sysbus_connect_irq(busdev, 0, rpsa_pic[4]);
