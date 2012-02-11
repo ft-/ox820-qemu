@@ -102,7 +102,7 @@ static void ox820_rps_irq_write(void *opaque, target_phys_addr_t offset,
 
         case 0x000C >> 2:
             s->int_enabled &= (uint32_t)(~value);
-            s->int_raw_source &= (s->int_enabled & (~2));
+            s->int_raw_source &= (s->int_enabled | (~2));
             ox820_rps_irq_update(s);
             break;
 
