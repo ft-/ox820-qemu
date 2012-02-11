@@ -186,15 +186,22 @@ static int ox820_rps_timer_init(SysBusDevice *dev)
     sysbus_init_mmio(dev, &s->iomem);
     sysbus_init_irq(dev, &s->irq);
 
-    s->timer_load = 0xFFFF;
     s->timer_last_load = 0;
-    s->timer_control = 0xC0;
     s->timer = qemu_new_timer_ns(vm_clock, ox820_rps_timer_tick, s);
     vmstate_register(&dev->qdev, -1, &vmstate_ox820_rps_timer, s);
     s->time = qemu_get_clock_ns(vm_clock);
-    ox820_rps_timer_update(s);
+    if(s->timer_control & 0x80)
+    {
+        ox820_rps_timer_update(s);
+    }
     return 0;
 }
+
+static Property ox820_rps_timer_properties[] = {
+    DEFINE_PROP_UINT32("timer-control", ox820_rps_timer_state, timer_control, 0x00),
+    DEFINE_PROP_UINT32("timer-load", ox820_rps_timer_state, timer_load, 0),
+    DEFINE_PROP_END_OF_LIST(),
+};
 
 static void ox820_rps_timer_class_init(ObjectClass *klass, void *data)
 {
@@ -204,6 +211,7 @@ static void ox820_rps_timer_class_init(ObjectClass *klass, void *data)
     dc->no_user = 1;
     sdc->init = ox820_rps_timer_init;
     dc->reset = ox820_rps_timer_reset;
+    dc->props = ox820_rps_timer_properties;
 }
 
 static TypeInfo ox820_rps_timer_info = {

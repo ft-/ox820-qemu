@@ -69,7 +69,8 @@ static void ox820_init(ram_addr_t ram_size,
                      const char *kernel_filename, const char *kernel_cmdline,
                      const char *initrd_filename, const char *cpu_model)
 {
-    int num_cpus = 2; /* 1, 2 */
+    int num_cpus = 1; /* 1, 2 */
+    uint32_t chip_config;
     CPUState *env0;
     CPUState *env1;
     //CPUState* leon;
@@ -191,6 +192,7 @@ static void ox820_init(ram_addr_t ram_size,
     }
 
     dev = qdev_create(NULL, "ox820-rps-timer");
+    qdev_prop_set_uint32(dev, "timer-control", 0x80);
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
     sysbus_connect_irq(busdev, 0, rpsa_pic[4]);
@@ -220,6 +222,12 @@ static void ox820_init(ram_addr_t ram_size,
     memory_region_add_subregion(rpsa_region, 0x000003C0, sysbus_mmio_get_region(busdev, 0));
 
     dev = qdev_create(NULL, "ox820-rps-misc");
+    chip_config = 0;
+    if(num_cpus > 1)
+    {
+        chip_config |= 0x00000001;
+    }
+    qdev_prop_set_uint32(dev, "chip-configuration", chip_config);
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
     memory_region_add_subregion(rpsc_region, 0x000003C0, sysbus_mmio_get_region(busdev, 0));

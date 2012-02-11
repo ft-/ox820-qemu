@@ -59,7 +59,7 @@ static int ox820_rps_misc_init(SysBusDevice *dev)
 }
 
 static Property ox820_rps_misc_properties[] = {
-    DEFINE_PROP_UINT32("chip-configuration", ox820_rps_misc_state, chip_configuration, 0x20100001),
+    DEFINE_PROP_UINT32("chip-configuration", ox820_rps_misc_state, chip_configuration, 0x00000000),
     DEFINE_PROP_UINT32("chip-id", ox820_rps_misc_state, chip_id, 0x38323000),
     DEFINE_PROP_END_OF_LIST(),
 };

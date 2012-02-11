@@ -70,8 +70,13 @@ static void ox820_sysctrl_rstck_write(void *opaque, target_phys_addr_t offset,
         break;
 
     case 0x0010 >> 2:
-        s->rsten_stat |= value; /* TODO: how to pass on reset from here */
+        s->rsten_stat |= value;
         ox820_sysctrl_rstck_update(s);
+        if(value & 0xD)
+        {
+            s->rsten_stat &= (~0xD);
+            ox820_sysctrl_rstck_update(s);
+        }
         break;
 
     case 0x0014 >> 2:

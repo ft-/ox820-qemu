@@ -309,7 +309,7 @@ static void nand_command(NANDFlashState *s)
     case NAND_CMD_READSTATUS:
         s->ioaddr = s->io;
         s->iolen = 0;
-        nand_pushio_byte(s, s->status);
+        nand_pushio_byte(s, s->status | 0x40);
         break;
 
     default:
