@@ -24,9 +24,9 @@
 static uint32_t smpboot[] = {
   0xe3a0064e, /* mov r0, #0x04e00000 */
   0xe59040c4, /* loop: ldr r4, [r0, #0xc4] */
-  0xe3340000, /* teq r4, #0 */
+  0xe3540000, /* cmp r4, #0 */
   0x0afffffc, /* beq loop */
-  0xe590f0c8, /* ldr pc, [r0, #0x200] */
+  0xe590f0c8, /* ldr pc, [r0, #0xc8] */
 };
 
 static uint32_t emptyboot[] = {
