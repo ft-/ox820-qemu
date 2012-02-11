@@ -35,14 +35,9 @@ static uint32_t ox820_rps_timer_read_val(ox820_rps_timer_state* s)
     distance = qemu_get_clock_ns(vm_clock) - s->time;
     distance = muldiv64(distance, 6250000, prescale);
 
-    if (distance >= s->timer_last_load)
-    {
-        return 0;
-    }
-    else
-    {
-        return s->timer_last_load - (uint32_t) distance;
-    }
+    distance %= (s->timer_last_load + 1);
+
+    return s->timer_last_load - (uint32_t) distance;
 }
 
 static void ox820_rps_timer_update(ox820_rps_timer_state* s)
@@ -66,9 +61,8 @@ static void ox820_rps_timer_update(ox820_rps_timer_state* s)
     }
 
     new_time = muldiv64(s->timer_last_load, prescale, 6250000) + s->time;
-    qemu_mod_timer(s->timer, new_time);
     s->time = new_time;
-    qemu_set_irq(s->irq, 1);
+    qemu_mod_timer(s->timer, new_time);
 }
 
 static void ox820_rps_timer_tick(void* opaque)
