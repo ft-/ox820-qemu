@@ -158,7 +158,7 @@ static void ox820_init(ram_addr_t ram_size,
     }
 
     /*=========================================================================*/
-    /* RPS-A/RPS-C */
+    /* RPS-A */
     splitirq[0] = qemu_irq_split(gic_pic[36], cpu_pic0[ARM_PIC_CPU_FIQ]);
     dev = qdev_create(NULL, "ox820-rps-irq");
     qdev_init_nofail(dev);
@@ -180,6 +180,25 @@ static void ox820_init(ram_addr_t ram_size,
         splitirq[0] = gic_pic[34];
     }
 
+    dev = qdev_create(NULL, "ox820-rps-timer");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    sysbus_connect_irq(busdev, 0, rpsa_pic[4]);
+    memory_region_add_subregion(rpsa_region, 0x00000200, sysbus_mmio_get_region(busdev, 0));
+
+    dev = qdev_create(NULL, "ox820-rps-timer");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    sysbus_connect_irq(busdev, 0, rpsa_pic[5]);
+    memory_region_add_subregion(rpsa_region, 0x00000220, sysbus_mmio_get_region(busdev, 0));
+
+    dev = qdev_create(NULL, "ox820-rps-misc");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(rpsa_region, 0x000003C0, sysbus_mmio_get_region(busdev, 0));
+
+    /*=========================================================================*/
+    /* RPS-C */
     dev = qdev_create(NULL, "ox820-rps-irq");
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
@@ -194,18 +213,6 @@ static void ox820_init(ram_addr_t ram_size,
     dev = qdev_create(NULL, "ox820-rps-timer");
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
-    sysbus_connect_irq(busdev, 0, rpsa_pic[4]);
-    memory_region_add_subregion(rpsa_region, 0x00000200, sysbus_mmio_get_region(busdev, 0));
-
-    dev = qdev_create(NULL, "ox820-rps-timer");
-    qdev_init_nofail(dev);
-    busdev = sysbus_from_qdev(dev);
-    sysbus_connect_irq(busdev, 0, rpsa_pic[5]);
-    memory_region_add_subregion(rpsa_region, 0x00000220, sysbus_mmio_get_region(busdev, 0));
-
-    dev = qdev_create(NULL, "ox820-rps-timer");
-    qdev_init_nofail(dev);
-    busdev = sysbus_from_qdev(dev);
     sysbus_connect_irq(busdev, 0, rpsc_pic[4]);
     memory_region_add_subregion(rpsc_region, 0x00000200, sysbus_mmio_get_region(busdev, 0));
 
@@ -214,11 +221,6 @@ static void ox820_init(ram_addr_t ram_size,
     busdev = sysbus_from_qdev(dev);
     sysbus_connect_irq(busdev, 0, rpsc_pic[5]);
     memory_region_add_subregion(rpsc_region, 0x00000220, sysbus_mmio_get_region(busdev, 0));
-
-    dev = qdev_create(NULL, "ox820-rps-misc");
-    qdev_init_nofail(dev);
-    busdev = sysbus_from_qdev(dev);
-    memory_region_add_subregion(rpsa_region, 0x000003C0, sysbus_mmio_get_region(busdev, 0));
 
     dev = qdev_create(NULL, "ox820-rps-misc");
     chip_config = 0;
