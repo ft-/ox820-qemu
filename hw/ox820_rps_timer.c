@@ -24,13 +24,13 @@ typedef struct {
 static uint32_t ox820_rps_timer_read_val(ox820_rps_timer_state* s)
 {
     uint64_t distance;
-    int64_t prescale;
+    int64_t prescale = 1000000000;
     switch(s->timer_control & 0xC)
     {
-        case 0x0: prescale = 1 * (int64_t)1000000000; break;
-        case 0x4: prescale = 16 * (int64_t)1000000000; break;
-        case 0x8: prescale = 256 * (int64_t)1000000000; break;
-        default: prescale = 1 * (int64_t)1000000000; break; /* reserved but put a useful value here */
+        case 0x0: prescale *= 1; break;
+        case 0x4: prescale *= 16; break;
+        case 0x8: prescale *= 256; break;
+        default: prescale *= 1; break; /* reserved but put a useful value here */
     }
     distance = qemu_get_clock_ns(vm_clock) - s->time;
     distance = muldiv64(distance, 6250000, prescale);
@@ -43,13 +43,13 @@ static uint32_t ox820_rps_timer_read_val(ox820_rps_timer_state* s)
 static void ox820_rps_timer_update(ox820_rps_timer_state* s)
 {
     int64_t new_time;
-    int64_t prescale;
+    int64_t prescale = 1000000000;
     switch(s->timer_control & 0xC)
     {
-        case 0x0: prescale = 1 * (int64_t)1000000000; break;
-        case 0x4: prescale = 16 * (int64_t)1000000000; break;
-        case 0x8: prescale = 256 * (int64_t)1000000000; break;
-        default: prescale = 1 * (int64_t)1000000000; break; /* reserved but put a useful value here */
+        case 0x0: prescale *= 1; break;
+        case 0x4: prescale *= 16; break;
+        case 0x8: prescale *= 256; break;
+        default: prescale *= 1; break; /* reserved but put a useful value here */
     }
     if(s->timer_control & 0x40)
     {
