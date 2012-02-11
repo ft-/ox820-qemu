@@ -145,9 +145,9 @@ static void ox820_rps_timer_reset(DeviceState *d)
 
     qemu_del_timer(s->timer);
 
-    s->timer_control = 0xC0;
+    s->timer_control = 0x00;
     s->timer_last_load = 0;
-    s->timer_load = 0xFFFF;
+    s->timer_load = 0;
     qemu_set_irq(s->irq, 0);
     s->time = qemu_get_clock_ns(vm_clock);
     ox820_rps_timer_update(s);
