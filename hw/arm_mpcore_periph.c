@@ -11,7 +11,7 @@
 #include "sysbus.h"
 #include "cpu-all.h"
 
-#if 1
+#if 0
 #define DPRINTF(args...) printf(args)
 #else
 #define DPRINTF(args...) {}
@@ -22,6 +22,7 @@
 #define MAX_DIST_EXT_INT_STATE_VARS ((MAX_MPCORE_IRQS + 31) >> 5) - 1
 
 #define SCU_OFS_CONTROL         0x00
+#define SCU_OFS_CONFIG          0x04
 
 #define GIC_OFS_ICCICR          0x00
 #define GIC_OFS_ICCPMR          0x04
@@ -467,6 +468,11 @@ static uint64_t scu_read(void* opaque, target_phys_addr_t offset, unsigned size)
     {
         case SCU_OFS_CONTROL >> 2:
             c = s->scu_control;
+            break;
+
+        case SCU_OFS_CONFIG >> 2:
+            c = gic_current_cpu();
+            c |= (((1u << s->num_cpu) - 1) << 4);
             break;
     }
 
