@@ -61,6 +61,10 @@ typedef struct {
     uint32_t        icr;
     uint32_t        pmr;
     uint32_t        bpr;
+    uint32_t        apr;
+    uint16_t        intid;
+    uint16_t        last_irq[MAX_MPCORE_IRQS];
+    uint8_t         last_apr[MAX_MPCORE_IRQS];
 } gic_cpu_state;
 
 typedef struct {
@@ -178,7 +182,17 @@ static void gic_irq_update(periph_state* s)
         pendirq = s->dist.pending_irq_int[cpu] & s->dist.ier_int[cpu] & (~s->dist.abr_int[cpu]);
         if(0 != pendirq)
         {
-            irq_out[cpu] = 1;
+            for(irq = 0; irq < 32; ++irq)
+            {
+                if(pendirq & (1u << irq))
+                {
+                    uint32_t ipr = s->dist.ipr_int[cpu][irq];
+                    if(ipr < s->cpu[cpu].pmr && ipr < s->cpu[cpu].apr)
+                    {
+                        irq_out[cpu] = 1;
+                    }
+                }
+            }
         }
 
         for(irq = 0; irq < MAX_DIST_EXT_INT_STATE_VARS; ++irq)
@@ -188,11 +202,14 @@ static void gic_irq_update(periph_state* s)
                             (~s->dist.abr_ext[1][irq]) &
                             (~s->dist.abr_ext[2][irq]) &
                             (~s->dist.abr_ext[3][irq]);
-            if(pendirq && (s->dist.dcr & 1))
+            if(pendirq != 0 && (s->dist.dcr & 1))
             {
                 for(n = 0; n < 32; ++n)
                 {
-                    if(s->dist.iptr_ext[irq * 32 + n] & (1 << cpu))
+                    uint32_t ipr = s->dist.ipr_ext[irq * 32 + n];
+                    if((s->dist.iptr_ext[irq * 32 + n] & (1 << cpu)) &&
+                        ipr < s->cpu[cpu].pmr &&
+                        ipr < s->cpu[cpu].apr)
                     {
                         irq_out[cpu] = 1;
                     }
@@ -215,12 +232,17 @@ static void gic_irq_update(periph_state* s)
     }
 }
 
-static uint32_t gic_ack_irq(periph_state* s, int cpu)
+static uint32_t gic_hpir_irq(periph_state* s, int cpu)
 {
-    uint16_t ipr = 0x100;
+    uint16_t ipr = s->cpu[cpu].pmr;
     uint32_t intid = 0x3FF;
     unsigned int irq, n;
     uint32_t pendirq;
+
+    if(ipr > s->cpu[cpu].apr)
+    {
+        ipr = s->cpu[cpu].apr;
+    }
 
     for(cpu = 0; cpu < s->num_cpu; ++cpu)
     {
@@ -235,7 +257,6 @@ static uint32_t gic_ack_irq(periph_state* s, int cpu)
                     {
                         ipr = s->dist.ipr_int[cpu][n];
                         intid = n;
-                        s->dist.abr_int[cpu] |= (1u << n);
                     }
                 }
             }
@@ -258,7 +279,6 @@ static uint32_t gic_ack_irq(periph_state* s, int cpu)
                         {
                             ipr = s->dist.ipr_ext[irq * 32 + n];
                             intid = irq * 32 + n + 32;
-                            s->dist.abr_ext[cpu][irq] |= (1u << n);
                         }
                     }
                 }
@@ -269,19 +289,55 @@ static uint32_t gic_ack_irq(periph_state* s, int cpu)
     return intid;
 }
 
-static void gic_end_of_irq(periph_state* s, int cpu, uint32_t irq)
+static uint32_t gic_ack_irq(periph_state* s, int cpu)
 {
-    if(irq < 32)
+    uint32_t intid = gic_hpir_irq(s, cpu);
+
+    if(intid < s->num_irq)
     {
-        s->dist.abr_int[cpu] &= ~(1u << irq);
-        s->dist.pending_irq_int[cpu] &= ~(1u << irq);
+        s->cpu[cpu].last_irq[intid] = s->cpu[cpu].intid;
+        s->cpu[cpu].last_apr[intid] = s->cpu[cpu].apr;
+    }
+
+    if(intid < 32)
+    {
+        s->dist.abr_int[cpu] |= (1u << intid);
+        s->dist.pending_irq_int[cpu] &= ~(1u << intid);
+        s->cpu[cpu].apr = s->dist.ipr_int[cpu][intid];
+        s->cpu[cpu].intid = intid;
+    }
+    else if(intid < s->num_irq)
+    {
+        s->dist.abr_ext[cpu][intid / 32 - 1] |= (1u << (intid & 31));
+        s->dist.pending_irq_ext[intid / 32 - 1] &= ~(1u << (intid & 31));
+        s->cpu[cpu].apr = s->dist.ipr_ext[intid - 32];
+        s->cpu[cpu].intid = intid;
     }
     else
     {
-        irq -= 32;
-        s->dist.abr_ext[cpu][irq / 32] &= ~(1u << (irq & 31));
-        s->dist.pending_irq_ext[irq / 32] &= ~(1u << (irq & 31));
+        intid = 0x3ff;
     }
+
+    return intid;
+}
+
+static void gic_end_of_irq(periph_state* s, int cpu, uint32_t irq)
+{
+    if(s->cpu[cpu].intid != irq || irq == 0x3ff)
+    {
+        return;
+    }
+    if(irq < 32)
+    {
+        s->dist.abr_int[cpu] &= ~(1u << irq);
+    }
+    else
+    {
+        s->dist.abr_ext[cpu][irq / 32 - 1] &= ~(1u << (irq & 31));
+    }
+    s->cpu[cpu].apr = s->cpu[cpu].last_apr[irq];
+    s->cpu[cpu].intid = s->cpu[cpu].last_irq[irq];
+
     gic_irq_update(s);
 }
 
@@ -315,12 +371,15 @@ static uint64_t gic_read(periph_state* s, int cpu, target_phys_addr_t offset,
 
         case GIC_OFS_ICCIAR >> 2:
             c = gic_ack_irq(s, cpu);
+            DPRINTF("gic_read: CPU=%u IAR=%u\n", (unsigned int) cpu, (unsigned int) c);
             break;
 
         case GIC_OFS_ICCRPR >> 2:
+            c = s->cpu[cpu].apr;
             break;
 
         case GIC_OFS_ICCHPIR >> 2:
+            c = gic_hpir_irq(s, cpu);
             break;
 
         case GIC_OFS_ICCABPR >> 2:
@@ -362,11 +421,11 @@ static void gic_write(periph_state* s, int cpu, target_phys_addr_t offset,
 
         case GIC_OFS_ICCBPR >> 2:
             s->cpu[cpu].bpr = value & 3;
-            DPRINTF("gic_write: CPU=%u, PMR=%x\n", cpu, (unsigned int) s->cpu[cpu].bpr);
+            DPRINTF("gic_write: CPU=%u, BPR=%x\n", cpu, (unsigned int) s->cpu[cpu].bpr);
             break;
 
         case GIC_OFS_ICCEOIR >> 2:
-            DPRINTF("gic_write: CPU=%u, EOIR=%x\n", cpu, (unsigned int) value);
+            DPRINTF("gic_write: CPU=%u, EOIR=%u\n", cpu, (unsigned int) value);
             gic_end_of_irq(s, cpu, value);
             break;
 
@@ -448,6 +507,8 @@ static uint64_t dist_read(void* opaque, target_phys_addr_t offset, unsigned size
             break;
 
         case DIST_OFS_ICTR >> 2:
+            c = (s->num_cpu - 1) << 5;
+            c |= ((s->num_irq / 32) - 1);
             break;
 
         case DIST_OFS_IIDR >> 2:
@@ -583,6 +644,7 @@ static void dist_write(void* opaque, target_phys_addr_t offset, uint64_t value, 
     periph_state* s = opaque;
     int cpu = gic_current_cpu();
     offset &= 0xFFF;
+    DPRINTF("dist_write: CPU=%u, Offset=%x, Value=%x\n", cpu, (unsigned int) offset, (unsigned int) value);
     switch(offset >> 2)
     {
         case DIST_OFS_DCR >> 2:
@@ -637,6 +699,7 @@ static void dist_write(void* opaque, target_phys_addr_t offset, uint64_t value, 
             else if(offset <= DIST_OFS_ISER_END)
             {
                 uint32_t bank = (offset - DIST_OFS_ISER_START) >> 2;
+                DPRINTF("dist_write: CPU=%u, ISER%u=%x\n", cpu, (unsigned int) bank, (unsigned int) value);
                 if(bank == 0)
                 {
                     s->dist.ier_int[cpu] |= value;
@@ -650,6 +713,7 @@ static void dist_write(void* opaque, target_phys_addr_t offset, uint64_t value, 
             else if(offset <= DIST_OFS_ICER_END)
             {
                 uint32_t bank = (offset - DIST_OFS_ICER_START) >> 2;
+                DPRINTF("dist_write: CPU=%u, ICER%u=%x\n", cpu, (unsigned int) bank, (unsigned int) value);
                 if(bank == 0)
                 {
                     s->dist.ier_int[cpu] &= ~value;
@@ -663,9 +727,10 @@ static void dist_write(void* opaque, target_phys_addr_t offset, uint64_t value, 
             else if(offset <= DIST_OFS_ISPR_END)
             {
                 uint32_t bank = (offset - DIST_OFS_ISPR_START) >> 2;
+                DPRINTF("dist_write: CPU=%u, ISPR%u=%x\n", cpu, (unsigned int) bank, (unsigned int) value);
                 if(bank == 0)
                 {
-                    s->dist.pending_irq_int[cpu] |= value;
+//                    s->dist.pending_irq_int[cpu] |= value;
                 }
                 else
                 {
@@ -676,6 +741,7 @@ static void dist_write(void* opaque, target_phys_addr_t offset, uint64_t value, 
             else if(offset <= DIST_OFS_ICPR_END)
             {
                 uint32_t bank = (offset - DIST_OFS_ICPR_START) >> 2;
+                DPRINTF("dist_write: CPU=%u, ICPR%u=%x\n", cpu, (unsigned int) bank, (unsigned int) value);
                 if(bank == 0)
                 {
                     s->dist.pending_irq_int[cpu] &= ~value;
@@ -697,6 +763,7 @@ static void dist_write(void* opaque, target_phys_addr_t offset, uint64_t value, 
             {
                 uint32_t bank = (offset - DIST_OFS_IPR_START) / 32;
                 uint8_t* iptr;
+                DPRINTF("dist_write: CPU=%u, IPR%u=%x\n", cpu, (unsigned int) (offset - DIST_OFS_IPR_START) / 4, (unsigned int) value);
                 if(bank == 0)
                 {
                     iptr = &s->dist.ipr_int[cpu][offset - DIST_OFS_IPR_START];
@@ -721,6 +788,7 @@ static void dist_write(void* opaque, target_phys_addr_t offset, uint64_t value, 
             {
                 uint32_t bank = (offset - DIST_OFS_IPTR_START) / 32;
                 uint8_t* iptr;
+                DPRINTF("dist_write: CPU=%u, IPTR%u=%x\n", cpu, (unsigned int) (offset - DIST_OFS_IPTR_START) / 4, (unsigned int) value);
                 if(bank == 0)
                 {
                 }
@@ -744,6 +812,7 @@ static void dist_write(void* opaque, target_phys_addr_t offset, uint64_t value, 
             {
                 uint32_t bank = (offset - DIST_OFS_ICFR_START) >> 2;
                 unsigned int n;
+                DPRINTF("dist_write: CPU=%u, ICFR%u=%x\n", cpu, (unsigned int) (offset - DIST_OFS_ICFR_START) / 4, (unsigned int) value);
                 if(bank < 2)
                 {
 
@@ -879,6 +948,12 @@ static void periph_reset(DeviceState *d)
         s->dist.icfr_ext[n] = 0;
     }
 
+    /* make iptr default to all valid cpu interfaces set */
+    for(n = 32; n < s->num_irq; ++n)
+    {
+        s->dist.iptr_ext[n - 32] = (1 << s->num_cpu) - 1;
+    }
+
     gic_irq_update(s);
 }
 
@@ -931,7 +1006,6 @@ static int periph_init(SysBusDevice *dev)
         memory_region_add_subregion(&s->iomem, 0x0100 * (n + 2), &s->gic_iomem[n]);
     }
     memory_region_add_subregion(&s->iomem, 0x1000, &s->dist_iomem);
-    sysbus_init_mmio(dev, &s->iomem);
 
     s->mptimer = qdev_create(NULL, "arm_mptimer");
     qdev_prop_set_uint32(s->mptimer, "num-cpu", s->num_cpu);
@@ -942,14 +1016,18 @@ static int periph_init(SysBusDevice *dev)
      * for each specific CPU.
      */
     s->timer_irq = qemu_allocate_irqs(periph_mptimer_set_irq,
-                                      s, (s->num_cpu + 1) * 2);
+                                      s, (s->num_cpu) * 2);
     for (n = 0; n < (s->num_cpu + 1) * 2; n++) {
         /* Timers at 0x600, 0x700, ...; watchdogs at 0x620, 0x720, ... */
         target_phys_addr_t offset = 0x600 + (n >> 1) * 0x100 + (n & 1) * 0x20;
         memory_region_add_subregion(&s->iomem, offset,
                                     sysbus_mmio_get_region(busdev, n));
     }
+    for (n = 0; n < s->num_cpu * 2; n++) {
+        sysbus_connect_irq(busdev, n, s->timer_irq[n]);
+    }
 
+    sysbus_init_mmio(dev, &s->iomem);
     /* Routed irqs at 0 - n + IRQ / FIQ */
     qdev_init_gpio_in(&dev->qdev, periph_set_irq, s->num_irq - 32 + s->num_cpu * 2);
 
@@ -958,6 +1036,8 @@ static int periph_init(SysBusDevice *dev)
         sysbus_init_irq(dev, &s->irq_out[n]);
         s->irq_state[n] = 2;
         s->fiq_state[n] = 2;
+        s->cpu[n].intid = 0x3FF;
+        s->cpu[n].apr = 0xFF;
     }
     for(n = 0; n < s->num_cpu; ++n)
     {
@@ -983,6 +1063,12 @@ static int periph_init(SysBusDevice *dev)
         s->dist.ier_ext[n] = 0;
         s->dist.ipr_ext[n] = 0;
         s->dist.icfr_ext[n] = 0;
+    }
+
+    /* make iptr default to all valid cpu interfaces set */
+    for(n = 32; n < s->num_irq; ++n)
+    {
+        s->dist.iptr_ext[n - 32] = (1 << s->num_cpu) - 1;
     }
 
 

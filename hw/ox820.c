@@ -43,32 +43,21 @@ static uint32_t emptyboot[] = {
 static void ox820_write_secondary(CPUState *env,
                                   const struct arm_boot_info *info)
 {
-    int n;
-    for (n = 0; n < ARRAY_SIZE(smpboot); n++) {
-        smpboot[n] = tswap32(smpboot[n]);
-    }
-    rom_add_blob_fixed("smpboot", smpboot, sizeof(smpboot),
-                       0x8000);
-}
 
-static void ox820_reset_secondary(CPUState *env,
-                                  const struct arm_boot_info *info)
-{
-    env->regs[15] = 0x8000;
 }
 
 static struct arm_boot_info ox820_cpu0_binfo = {
     .loader_start = 0x60000000,
     .board_id = 0x480,
-    .is_linux = 0
+    .is_linux = 1,
+    .write_secondary_boot = ox820_write_secondary
 };
 
 static struct arm_boot_info ox820_cpu1_binfo = {
     .loader_start = 0x00008000,
     .board_id = 0x480,
-    .write_secondary_boot = ox820_write_secondary,
-    .secondary_cpu_reset_hook = ox820_reset_secondary,
-    .is_linux = 0
+    .entry = 0x00008000,
+    .write_secondary_boot = ox820_write_secondary
 };
 
 static void ox820_add_mem_alias(MemoryRegion* aliasedregion, const char* name, target_phys_addr_t tgt, uint64_t size)
@@ -87,25 +76,10 @@ static void ox820_reset(void* opaque, int irq, int level)
     }
 }
 
-static void ox820_init_stg212(MemoryRegion* main_1gb_region)
-{
-    DeviceState *dev;
-    SysBusDevice *busdev;
-    /*=========================================================================*/
-    /* NAND */
-    dev = qdev_create(NULL, "ox820-nand");
-    qdev_prop_set_uint32(dev, "manufacturer-id", NAND_MFR_HYNIX);
-    qdev_prop_set_uint32(dev, "device-id", 0xF1);
-    qdev_init_nofail(dev);
-    busdev = sysbus_from_qdev(dev);
-    memory_region_add_subregion(main_1gb_region, 0x01000000, sysbus_mmio_get_region(busdev, 0));
-}
-
-static void ox820_init_common(ram_addr_t ram_size,
+static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
                               const char *boot_device,
                               const char *kernel_filename, const char *kernel_cmdline,
-                              const char *initrd_filename, const char *cpu_model,
-                              void (* ox820_init_specific)(MemoryRegion* main_1gb_region))
+                              const char *initrd_filename, const char *cpu_model)
 {
     int num_cpus = 2; /* 1, 2 */
     uint32_t chip_config;
@@ -184,7 +158,11 @@ static void ox820_init_common(ram_addr_t ram_size,
         cpu_pic1 = arm_pic_init_cpu(env1);
     }
 
-    dev = qdev_create(NULL, "arm11mpcore_priv"/*"mpcore-periph"*/);
+#if 1
+    dev = qdev_create(NULL, "mpcore-periph");
+#else
+    dev = qdev_create(NULL, "arm11mpcore_priv");
+#endif
     qdev_prop_set_uint32(dev, "num-cpu", num_cpus > 1 ? 2 : 1);
     qdev_prop_set_uint32(dev, "num-irq", 64);
     qdev_init_nofail(dev);
@@ -389,11 +367,6 @@ static void ox820_init_common(ram_addr_t ram_size,
     sysbus_connect_irq(sysctrl_busdev, 8, qdev_get_gpio_in(dev, 0));   /* RSTEN */
     sysbus_connect_irq(sysctrl_busdev, 32 + 1, qdev_get_gpio_in(dev, 1));   /* CKEN */
 
-    if(NULL != ox820_init_specific)
-    {
-        ox820_init_specific(main_1gb_region);
-    }
-
     /*=========================================================================*/
     /* Boot Config */
     for (i = 0; i < ARRAY_SIZE(emptyboot); i++) {
@@ -402,13 +375,25 @@ static void ox820_init_common(ram_addr_t ram_size,
     rom_add_blob_fixed("emptyboot", emptyboot, sizeof(emptyboot),
                        0x0000);
 
+    for (i = 0; i < ARRAY_SIZE(smpboot); i++) {
+        smpboot[i] = tswap32(smpboot[i]);
+    }
+    rom_add_blob_fixed("smpboot", smpboot, sizeof(smpboot),
+                       0x8000);
+
     ox820_cpu0_binfo.ram_size = ram_size;
     ox820_cpu0_binfo.kernel_filename = kernel_filename;
     ox820_cpu0_binfo.kernel_cmdline = kernel_cmdline;
     ox820_cpu0_binfo.initrd_filename = initrd_filename;
     ox820_cpu0_binfo.nb_cpus = num_cpus;
     arm_load_kernel(env0, &ox820_cpu0_binfo);
-    env1->boot_info = &ox820_cpu1_binfo;
+    ox820_cpu1_binfo.ram_size = ram_size;
+    if(NULL != env1)
+    {
+        env1->boot_info = &ox820_cpu1_binfo;
+    }
+
+    return main_1gb_region;
 }
 
 static void ox820_init_basic(ram_addr_t ram_size,
@@ -416,7 +401,7 @@ static void ox820_init_basic(ram_addr_t ram_size,
                               const char *kernel_filename, const char *kernel_cmdline,
                               const char *initrd_filename, const char *cpu_model)
 {
-    ox820_init_common(ram_size, boot_device, kernel_filename, kernel_cmdline, initrd_filename, cpu_model, NULL);
+    (void) ox820_init_common(ram_size, boot_device, kernel_filename, kernel_cmdline, initrd_filename, cpu_model);
 }
 
 static QEMUMachine ox820_machine = {
@@ -431,9 +416,18 @@ static void ox820_stg212_init(ram_addr_t ram_size,
                               const char *kernel_filename, const char *kernel_cmdline,
                               const char *initrd_filename, const char *cpu_model)
 {
-    ox820_init_common(ram_size, boot_device, kernel_filename, kernel_cmdline, initrd_filename, cpu_model, ox820_init_stg212);
+    MemoryRegion* main_1gb_region = ox820_init_common(ram_size, boot_device, kernel_filename, kernel_cmdline, initrd_filename, cpu_model);
+    DeviceState *dev;
+    SysBusDevice *busdev;
+    /*=========================================================================*/
+    /* NAND */
+    dev = qdev_create(NULL, "ox820-nand");
+    qdev_prop_set_uint32(dev, "manufacturer-id", NAND_MFR_HYNIX);
+    qdev_prop_set_uint32(dev, "device-id", 0xF1);
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(main_1gb_region, 0x01000000, sysbus_mmio_get_region(busdev, 0));
 }
-
 
 static QEMUMachine ox820_stg212_machine = {
     .name = "ox820-stg212",
