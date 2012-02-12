@@ -704,6 +704,16 @@ static void dist_write(void* opaque, target_phys_addr_t offset, uint64_t value, 
                 {
                     s->dist.ier_int[cpu] |= value;
                 }
+                else if(bank >= (s->num_irq + 31) / 32)
+                {
+                    /* no more irqs */
+                }
+                else if(bank == (s->num_irq - 1) / 32 && (s->num_irq & 31))
+                {
+                    uint32_t mask = 1u << (s->num_irq & 31);
+                    mask -= 1;
+                    s->dist.ier_ext[bank - 1] |= (value & mask);
+                }
                 else
                 {
                      s->dist.ier_ext[bank - 1] |= value;
@@ -731,6 +741,16 @@ static void dist_write(void* opaque, target_phys_addr_t offset, uint64_t value, 
                 if(bank == 0)
                 {
 //                    s->dist.pending_irq_int[cpu] |= value;
+                }
+                else if(bank >= (s->num_irq + 31) / 32)
+                {
+                    /* no more irqs */
+                }
+                else if(bank == (s->num_irq - 1) / 32 && (s->num_irq & 31))
+                {
+                    uint32_t mask = 1u << (s->num_irq & 31);
+                    mask -= 1;
+                    s->dist.pending_irq_ext[bank - 1] |= (value & mask);
                 }
                 else
                 {
