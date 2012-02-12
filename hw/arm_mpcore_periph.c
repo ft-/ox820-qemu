@@ -4,6 +4,8 @@
  * Written by Sven Bormann
  *
  * This code is licensed under the GPL.
+ *
+ * not yet working as such
  */
 
 #include "sysbus.h"
