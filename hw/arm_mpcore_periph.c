@@ -503,6 +503,54 @@ static uint64_t dist_read(void* opaque, target_phys_addr_t offset, unsigned size
     offset &= 0xFFF;
     switch(offset >> 2)
     {
+        case 0xFD0 >> 2:
+            c = 0x00000004;
+            break;
+
+        case 0xFD4 >> 2:
+            c = 0x00000000;
+            break;
+
+        case 0xFD8 >> 2:
+            c = 0x00000000;
+            break;
+
+        case 0xFDC >> 2:
+            c = 0x00000000;
+            break;
+
+        case 0xFE0 >> 2:
+            c = 0x00000090;
+            break;
+
+        case 0xFE4 >> 2:
+            c = 0x000000B3;
+            break;
+
+        case 0xFE8 >> 2:
+            c = 0x00000010;
+            break;
+
+        case 0xFEC >> 2:
+            c = 0x00000000;
+            break;
+
+        case 0xFF0 >> 2:
+            c = 0x0000000D;
+            break;
+
+        case 0xFF4 >> 2:
+            c = 0x000000F0;
+            break;
+
+        case 0xFF8 >> 2:
+            c = 0x00000005;
+            break;
+
+        case 0xFFC >> 2:
+            c = 0x000000B1;
+            break;
+
         case DIST_OFS_DCR >> 2:
             break;
 
