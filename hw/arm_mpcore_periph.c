@@ -11,7 +11,7 @@
 #include "sysbus.h"
 #include "cpu-all.h"
 
-#if 0
+#if 1
 #define DPRINTF(args...) printf(args)
 #else
 #define DPRINTF(args...) {}
@@ -97,6 +97,7 @@ typedef struct {
     uint32_t        scu_control;
     DeviceState*    mptimer;
     qemu_irq *      timer_irq;
+    uint16_t        sgi_ier_init;
 
     gic_cpu_state   cpu[MAX_MPCORE_CPUS];
     gic_dist_state  dist;
@@ -714,7 +715,11 @@ static void dist_write(void* opaque, target_phys_addr_t offset, uint64_t value, 
                     case 0:
                         for(n = 0; n < s->num_cpu; ++n)
                         {
-                            s->dist.pending_irq_int[n] |= (1u << (value & 0xF));
+                            if(value & (0x10000 << n))
+                            {
+                                DPRINTF("dist_write: CPU=%u, SGI=%u->CPU%u\n", cpu, (unsigned int)(value & 0xF), n);
+                                s->dist.pending_irq_int[n] |= (1u << (value & 0xF));
+                            }
                         }
                         break;
 
@@ -723,12 +728,14 @@ static void dist_write(void* opaque, target_phys_addr_t offset, uint64_t value, 
                         {
                             if(cpu != n)
                             {
+                                DPRINTF("dist_write: CPU=%u, SGI=%u->CPU%u\n", cpu, (unsigned int)(value & 0xF), n);
                                 s->dist.pending_irq_int[n] |= (1u << (value & 0xF));
                             }
                         }
                         break;
 
                     case 2:
+                        DPRINTF("dist_write: CPU=%u, SGI=%u->CPU%u\n", cpu, (unsigned int)(value & 0xF), cpu);
                         s->dist.pending_irq_int[cpu] |= (1u << (value & 0xF));
                         break;
                 }
@@ -1005,9 +1012,9 @@ static void periph_reset(DeviceState *d)
     for(n = 0; n < s->num_cpu; ++n)
     {
         s->cpu[n].icr = 0;
-        s->cpu[n].pmr = 0;
+        s->cpu[n].pmr = 0x00;
         s->cpu[n].bpr = 0;
-        s->dist.ier_int[n] = 0;
+        s->dist.ier_int[n] = s->sgi_ier_init;
     }
     for(n = 0; n < MAX_DIST_EXT_INT_STATE_VARS; ++n)
     {
@@ -1117,9 +1124,9 @@ static int periph_init(SysBusDevice *dev)
     for(n = 0; n < s->num_cpu; ++n)
     {
         s->cpu[n].icr = 0;
-        s->cpu[n].pmr = 0;
+        s->cpu[n].pmr = 0xff;
         s->cpu[n].bpr = 0;
-        s->dist.ier_int[n] = 0;
+        s->dist.ier_int[n] = s->sgi_ier_init;
         /* IPTR of interrupts 0-31 are fixed */
         for(j = 0; j < 32; ++j)
         {
@@ -1146,6 +1153,7 @@ static int periph_init(SysBusDevice *dev)
 static Property periph_properties[] = {
     DEFINE_PROP_UINT32("num-cpu", periph_state, num_cpu, 1),
     DEFINE_PROP_UINT32("num-irq", periph_state, num_irq, 64),
+    DEFINE_PROP_UINT16("sgi-ier", periph_state, sgi_ier_init, 0xFFFF),
     DEFINE_PROP_END_OF_LIST(),
 };
 
