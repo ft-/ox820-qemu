@@ -15,6 +15,8 @@ typedef struct {
     MemoryRegion    iomem;
     DriveInfo      *nand_drive;
     DeviceState    *nand;
+    uint32_t        manufacturer_id;
+    uint32_t        device_id;
 } ox820_nand_state;
 
 static int ox820_nand_cle(target_phys_addr_t offset)
@@ -81,6 +83,13 @@ static int ox820_nand_init(SysBusDevice *dev)
     return 0;
 }
 
+
+static Property ox820_nand_properties[] = {
+    DEFINE_PROP_UINT32("manufacturer-id", ox820_nand_state, manufacturer_id, NAND_MFR_HYNIX),
+    DEFINE_PROP_UINT32("device-id", ox820_nand_state, device_id, 0xF1),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
 static void ox820_nand_class_init(ObjectClass *klass, void *data)
 {
     SysBusDeviceClass *sdc = SYS_BUS_DEVICE_CLASS(klass);
@@ -88,6 +97,7 @@ static void ox820_nand_class_init(ObjectClass *klass, void *data)
 
     dc->no_user = 1;
     sdc->init = ox820_nand_init;
+    dc->props = ox820_nand_properties;
 }
 
 static TypeInfo ox820_nand_info = {

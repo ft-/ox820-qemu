@@ -18,6 +18,7 @@
 #include "exec-memory.h"
 #include "sysemu.h"
 #include "loader.h"
+#include "flash.h"
 #include "cpu-common.h"
 
 /* Board init.  */
@@ -53,6 +54,7 @@ static void ox820_reset_secondary(CPUState *env,
 
 static struct arm_boot_info ox820_binfo = {
     .loader_start = 0x60000000,
+    .board_id = 0x480,
     .write_secondary_boot = ox820_write_secondary,
     .secondary_cpu_reset_hook = ox820_reset_secondary
 };
@@ -73,10 +75,25 @@ static void ox820_reset(void* opaque, int irq, int level)
     }
 }
 
-static void ox820_init(ram_addr_t ram_size,
-                     const char *boot_device,
-                     const char *kernel_filename, const char *kernel_cmdline,
-                     const char *initrd_filename, const char *cpu_model)
+static void ox820_init_stg212(MemoryRegion* main_1gb_region)
+{
+    DeviceState *dev;
+    SysBusDevice *busdev;
+    /*=========================================================================*/
+    /* NAND */
+    dev = qdev_create(NULL, "ox820-nand");
+    qdev_prop_set_uint32(dev, "manufacturer-id", NAND_MFR_HYNIX);
+    qdev_prop_set_uint32(dev, "device-id", 0xF1);
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(main_1gb_region, 0x01000000, sysbus_mmio_get_region(busdev, 0));
+}
+
+static void ox820_init_common(ram_addr_t ram_size,
+                              const char *boot_device,
+                              const char *kernel_filename, const char *kernel_cmdline,
+                              const char *initrd_filename, const char *cpu_model,
+                              void (* ox820_init_specific)(MemoryRegion* main_1gb_region))
 {
     int num_cpus = 1; /* 1, 2 */
     uint32_t chip_config;
@@ -84,6 +101,7 @@ static void ox820_init(ram_addr_t ram_size,
     CPUState *env1;
     //CPUState* leon;
     SysBusDevice *busdev;
+    SysBusDevice* sysctrl_busdev;
     MemoryRegion *address_space_mem = get_system_memory();
     MemoryRegion *rom = g_new(MemoryRegion, 1);
     MemoryRegion *scratch = g_new(MemoryRegion, 1);
@@ -169,6 +187,14 @@ static void ox820_init(ram_addr_t ram_size,
     for (i = 32; i < 64; i++) {
         gic_pic[i] = qdev_get_gpio_in(dev, i - 32);
     }
+
+    /*=========================================================================*/
+    /* SYSCTRL (part 1) */
+    dev = qdev_create(NULL, "ox820-sysctrl-rstck");
+    qdev_init_nofail(dev);
+    sysctrl_busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(sysctrl_region, 0x00000024, sysbus_mmio_get_region(sysctrl_busdev, 0));
+    sysbus_connect_irq(sysctrl_busdev, 0, reset_irq[0]);
 
     /*=========================================================================*/
     /* RPS-A */
@@ -291,7 +317,7 @@ static void ox820_init(ram_addr_t ram_size,
     memory_region_add_subregion(main_1gb_region, 0x04100000, sysbus_mmio_get_region(busdev, 0));
 
     /*=========================================================================*/
-    /* SYSCTRL */
+    /* SYSCTRL (part 2) */
     splitirq[0] = qemu_irq_split(rpsa_pic[10], rpsc_pic[10]);
     splitirq[0] = qemu_irq_split(gic_pic[42], splitirq[0]);
     splitirq[1] = qemu_irq_split(rpsa_pic[11], rpsc_pic[11]);
@@ -305,12 +331,6 @@ static void ox820_init(ram_addr_t ram_size,
     sysbus_connect_irq(busdev, 1, splitirq[1]);
     sysbus_connect_irq(busdev, 2, splitirq[2]);
     memory_region_add_subregion(sysctrl_region, 0x0000004C, sysbus_mmio_get_region(busdev, 0));
-
-    dev = qdev_create(NULL, "ox820-sysctrl-rstck");
-    qdev_init_nofail(dev);
-    busdev = sysbus_from_qdev(dev);
-    memory_region_add_subregion(sysctrl_region, 0x00000024, sysbus_mmio_get_region(busdev, 0));
-    sysbus_connect_irq(busdev, 0, reset_irq[0]);
 
     dev = qdev_create(NULL, "ox820-sysctrl-plla");
     qdev_init_nofail(dev);
@@ -345,11 +365,22 @@ static void ox820_init(ram_addr_t ram_size,
     ox820_add_mem_alias(main_1gb_region, "main.alias", 0x40000000, 0x40000000);
 
     /*=========================================================================*/
-    /* SECCTRL */
-    dev = qdev_create(NULL, "ox820-nand");
+    /* DMA_SGDMA */
+    dev = qdev_create(NULL, "ox820-dma");
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
-    memory_region_add_subregion(main_1gb_region, 0x01000000, sysbus_mmio_get_region(busdev, 0));
+    memory_region_add_subregion(main_1gb_region, 0x05600000, sysbus_mmio_get_region(busdev, 0));
+    sysbus_connect_irq(busdev, 0, reset_irq[0]);
+    sysbus_connect_irq(busdev, 0, reset_irq[0]);
+    sysbus_connect_irq(busdev, 0, reset_irq[0]);
+    sysbus_connect_irq(busdev, 0, reset_irq[0]);
+    sysbus_connect_irq(sysctrl_busdev, 8, qdev_get_gpio_in(dev, 0));   /* RSTEN */
+    sysbus_connect_irq(sysctrl_busdev, 32 + 1, qdev_get_gpio_in(dev, 1));   /* CKEN */
+
+    if(NULL != ox820_init_specific)
+    {
+        ox820_init_specific(main_1gb_region);
+    }
 
     /*=========================================================================*/
     /* Boot Config */
@@ -367,16 +398,41 @@ static void ox820_init(ram_addr_t ram_size,
     arm_load_kernel(env0, &ox820_binfo);
 }
 
+static void ox820_init_basic(ram_addr_t ram_size,
+                              const char *boot_device,
+                              const char *kernel_filename, const char *kernel_cmdline,
+                              const char *initrd_filename, const char *cpu_model)
+{
+    ox820_init_common(ram_size, boot_device, kernel_filename, kernel_cmdline, initrd_filename, cpu_model, NULL);
+}
+
 static QEMUMachine ox820_machine = {
     .name = "ox820",
     .desc = "OX820 (ARM11MPCore)",
-    .init = ox820_init,
+    .init = ox820_init_basic,
+    .is_default = 1,
+};
+
+static void ox820_stg212_init(ram_addr_t ram_size,
+                              const char *boot_device,
+                              const char *kernel_filename, const char *kernel_cmdline,
+                              const char *initrd_filename, const char *cpu_model)
+{
+    ox820_init_common(ram_size, boot_device, kernel_filename, kernel_cmdline, initrd_filename, cpu_model, ox820_init_stg212);
+}
+
+
+static QEMUMachine ox820_stg212_machine = {
+    .name = "ox820-stg212",
+    .desc = "OX820-STG212 (ARM11MPCore)",
+    .init = ox820_stg212_init,
     .is_default = 1,
 };
 
 static void ox820_machine_init(void)
 {
     qemu_register_machine(&ox820_machine);
+    qemu_register_machine(&ox820_stg212_machine);
 }
 
 machine_init(ox820_machine_init);
