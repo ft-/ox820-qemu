@@ -8,6 +8,12 @@
  
 #include "sysbus.h"
 
+#if 0
+#define DPRINTF(args...) printf(args);
+#else
+#define DPRINTF(args...) {}
+#endif
+
 typedef struct {
     SysBusDevice    busdev;
     MemoryRegion    iomem;
@@ -19,18 +25,35 @@ typedef struct {
 
     qemu_irq        irq;
     qemu_irq        fiq;
+
+    int             irq_state;
+    int             fiq_state;
 } ox820_rps_irq_state;
 
 static void ox820_rps_irq_update(ox820_rps_irq_state* s)
 {
     uint32_t imask_source = s->int_enabled & s->int_raw_source;
     uint32_t fiq_mask_source = s->fiq_enabled;
+    int irq_out;
+    int fiq_out;
     if(!(s->int_raw_source & (1u << s->fiq_select)))
     {
         fiq_mask_source = 0;
     }
-    qemu_set_irq(s->irq, imask_source != 0);
-    qemu_set_irq(s->fiq, fiq_mask_source != 0);
+    irq_out = imask_source != 0 ? 1 : 0;
+    if(irq_out != s->irq_state)
+    {
+        s->irq_state = irq_out;
+        DPRINTF("RPS-IRQ => %u\n", irq_out);
+        qemu_set_irq(s->irq, irq_out);
+    }
+    fiq_out = fiq_mask_source != 0 ? 1 : 0;
+    if(fiq_out != s->fiq_state)
+    {
+        s->fiq_state = fiq_out;
+        DPRINTF("RPS-FIQ => %u\n", fiq_out);
+        qemu_set_irq(s->fiq, fiq_out);
+    }
 }
 
 static uint64_t ox820_rps_irq_read(void *opaque, target_phys_addr_t offset,
@@ -120,7 +143,6 @@ static void ox820_rps_irq_write(void *opaque, target_phys_addr_t offset,
 
         case 0x000C >> 2:
             s->int_enabled &= (uint32_t)(~value);
-            s->int_raw_source &= (s->int_enabled | (~2));
             ox820_rps_irq_update(s);
             break;
 
@@ -187,6 +209,8 @@ static void ox820_rps_irq_reset(DeviceState *d)
     s->fiq_enabled = 0;
     s->int_enabled = 0;
     s->int_raw_source &= (~2);
+    s->irq_state = 2;
+    s->fiq_state = 2;
     ox820_rps_irq_update(s);
 }
 
@@ -224,6 +248,8 @@ static int ox820_rps_irq_init(SysBusDevice *dev)
     s->int_enabled = 0;
     s->fiq_enabled = 0;
     s->fiq_select = 0;
+    s->irq_state = 2;
+    s->fiq_state = 2;
     vmstate_register(&dev->qdev, -1, &vmstate_ox820_rps_irq, s);
     return 0;
 }

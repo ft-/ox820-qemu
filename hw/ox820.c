@@ -141,7 +141,7 @@ static void ox820_init(ram_addr_t ram_size,
         cpu_pic1 = arm_pic_init_cpu(env1);
     }
 
-    dev = qdev_create(NULL, "arm11mpcore_priv");
+    dev = qdev_create(NULL, "mpcore-periph");
     qdev_prop_set_uint32(dev, "num-cpu", num_cpus > 1 ? 2 : 1);
     qdev_prop_set_uint32(dev, "num-irq", 64);
     qdev_init_nofail(dev);
