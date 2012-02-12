@@ -97,6 +97,8 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     qemu_irq gic_pic[64];
     qemu_irq *cpu_pic0;
     qemu_irq *cpu_pic1;
+    qemu_irq gic_fiq0;
+    qemu_irq gic_fiq1;
     DeviceState *dev;
     qemu_irq splitirq[3];
     MemoryRegion* main_1gb_region = g_new(MemoryRegion, 1);
@@ -158,11 +160,7 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
         cpu_pic1 = arm_pic_init_cpu(env1);
     }
 
-#if 1
     dev = qdev_create(NULL, "mpcore-periph");
-#else
-    dev = qdev_create(NULL, "arm11mpcore_priv");
-#endif
     qdev_prop_set_uint32(dev, "num-cpu", num_cpus > 1 ? 2 : 1);
     qdev_prop_set_uint32(dev, "num-irq", 64);
     qdev_init_nofail(dev);
@@ -172,11 +170,19 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     if(num_cpus > 1)
     {
         sysbus_connect_irq(busdev, 1, cpu_pic1[ARM_PIC_CPU_IRQ]);
+        sysbus_connect_irq(busdev, 2, cpu_pic0[ARM_PIC_CPU_FIQ]);
+        sysbus_connect_irq(busdev, 3, cpu_pic1[ARM_PIC_CPU_FIQ]);
+    }
+    else
+    {
+        sysbus_connect_irq(busdev, 2, cpu_pic0[ARM_PIC_CPU_FIQ]);
     }
 
     for (i = 32; i < 64; i++) {
         gic_pic[i] = qdev_get_gpio_in(dev, i - 32);
     }
+    gic_fiq0 = qdev_get_gpio_in(dev, 34);
+    gic_fiq1 = qdev_get_gpio_in(dev, 35);
 
     /*=========================================================================*/
     /* SYSCTRL (part 1) */
@@ -188,7 +194,7 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
 
     /*=========================================================================*/
     /* RPS-A */
-    splitirq[0] = qemu_irq_split(gic_pic[36], cpu_pic0[ARM_PIC_CPU_FIQ]);
+    splitirq[0] = qemu_irq_split(gic_pic[36], gic_fiq0);
     dev = qdev_create(NULL, "ox820-rps-irq");
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
@@ -202,7 +208,7 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
 
     if(num_cpus > 1)
     {
-        splitirq[0] = qemu_irq_split(gic_pic[34], cpu_pic1[ARM_PIC_CPU_FIQ]);
+        splitirq[0] = qemu_irq_split(gic_pic[34], gic_fiq1);
     }
     else
     {
