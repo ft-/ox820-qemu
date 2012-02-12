@@ -18,6 +18,7 @@
 #include "exec-memory.h"
 #include "sysemu.h"
 #include "loader.h"
+#include "cpu-common.h"
 
 /* Board init.  */
 
@@ -64,6 +65,14 @@ static void ox820_add_mem_alias(MemoryRegion* aliasedregion, const char* name, t
 
 }
 
+static void ox820_reset(void* opaque, int irq, int level)
+{
+    if(level)
+    {
+        qemu_system_reset(0);
+    }
+}
+
 static void ox820_init(ram_addr_t ram_size,
                      const char *boot_device,
                      const char *kernel_filename, const char *kernel_cmdline,
@@ -91,7 +100,11 @@ static void ox820_init(ram_addr_t ram_size,
     MemoryRegion* rpsc_region = g_new(MemoryRegion, 1);
     MemoryRegion* sysctrl_region = g_new(MemoryRegion, 1);
     MemoryRegion* smpboot_ram = g_new(MemoryRegion, 1);
+    qemu_irq* reset_irq;
     int i;
+
+    reset_irq = qemu_allocate_irqs(ox820_reset,
+                                   0, 1);
 
     cpu_model = "arm11mpcore";
     env0 = cpu_init(cpu_model);
@@ -297,6 +310,7 @@ static void ox820_init(ram_addr_t ram_size,
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
     memory_region_add_subregion(sysctrl_region, 0x00000024, sysbus_mmio_get_region(busdev, 0));
+    sysbus_connect_irq(busdev, 0, reset_irq[0]);
 
     dev = qdev_create(NULL, "ox820-sysctrl-plla");
     qdev_init_nofail(dev);
