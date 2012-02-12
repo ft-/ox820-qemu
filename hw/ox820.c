@@ -20,19 +20,24 @@
 #include "loader.h"
 #include "flash.h"
 #include "cpu-common.h"
+#include "cpu.h"
 
 /* Board init.  */
 
 static uint32_t smpboot[] = {
-  0xe3a0064e, /* mov r0, #0x04e00000 */
-  0xe59040c4, /* loop: ldr r4, [r0, #0xc4] */
-  0xe3540000, /* cmp r4, #0 */
-  0x0afffffc, /* beq loop */
-  0xe590f0c8, /* ldr pc, [r0, #0xc8] */
+    0xe3a0064e,     /* ldr r0, =0x04e00000 */
+    0xe3a02447,     /* ldr r1, =0x47000000 */
+    0xe3a01001,     /* mov r1, #1 */
+    0xe5821100,     /* str r1, [r2, #256] */
+    0xe320f003,     /* loop: wfi */
+    0xe59040c4,     /* ldr r4, [r0, #0xc4] */
+    0xe3540000,     /* cmp r4, #0 */
+    0x0afffffb,     /* beq loop */
+    0xe590f0c8,     /* ldr pc, [r0, #0xc8] */
 };
 
 static uint32_t emptyboot[] = {
-  0xbffffffe
+  0xeafffffe
 };
 
 static void ox820_write_secondary(CPUState *env,
@@ -52,11 +57,18 @@ static void ox820_reset_secondary(CPUState *env,
     env->regs[15] = 0x8000;
 }
 
-static struct arm_boot_info ox820_binfo = {
+static struct arm_boot_info ox820_cpu0_binfo = {
     .loader_start = 0x60000000,
     .board_id = 0x480,
+    .is_linux = 0
+};
+
+static struct arm_boot_info ox820_cpu1_binfo = {
+    .loader_start = 0x00008000,
+    .board_id = 0x480,
     .write_secondary_boot = ox820_write_secondary,
-    .secondary_cpu_reset_hook = ox820_reset_secondary
+    .secondary_cpu_reset_hook = ox820_reset_secondary,
+    .is_linux = 0
 };
 
 static void ox820_add_mem_alias(MemoryRegion* aliasedregion, const char* name, target_phys_addr_t tgt, uint64_t size)
@@ -95,7 +107,7 @@ static void ox820_init_common(ram_addr_t ram_size,
                               const char *initrd_filename, const char *cpu_model,
                               void (* ox820_init_specific)(MemoryRegion* main_1gb_region))
 {
-    int num_cpus = 1; /* 1, 2 */
+    int num_cpus = 2; /* 1, 2 */
     uint32_t chip_config;
     CPUState *env0;
     CPUState *env1;
@@ -390,12 +402,13 @@ static void ox820_init_common(ram_addr_t ram_size,
     rom_add_blob_fixed("emptyboot", emptyboot, sizeof(emptyboot),
                        0x0000);
 
-    ox820_binfo.ram_size = ram_size;
-    ox820_binfo.kernel_filename = kernel_filename;
-    ox820_binfo.kernel_cmdline = kernel_cmdline;
-    ox820_binfo.initrd_filename = initrd_filename;
-    ox820_binfo.nb_cpus = num_cpus;
-    arm_load_kernel(env0, &ox820_binfo);
+    ox820_cpu0_binfo.ram_size = ram_size;
+    ox820_cpu0_binfo.kernel_filename = kernel_filename;
+    ox820_cpu0_binfo.kernel_cmdline = kernel_cmdline;
+    ox820_cpu0_binfo.initrd_filename = initrd_filename;
+    ox820_cpu0_binfo.nb_cpus = num_cpus;
+    arm_load_kernel(env0, &ox820_cpu0_binfo);
+    env1->boot_info = &ox820_cpu1_binfo;
 }
 
 static void ox820_init_basic(ram_addr_t ram_size,
@@ -410,7 +423,7 @@ static QEMUMachine ox820_machine = {
     .name = "ox820",
     .desc = "OX820 (ARM11MPCore)",
     .init = ox820_init_basic,
-    .is_default = 1,
+    .is_default = 1
 };
 
 static void ox820_stg212_init(ram_addr_t ram_size,
@@ -426,7 +439,7 @@ static QEMUMachine ox820_stg212_machine = {
     .name = "ox820-stg212",
     .desc = "OX820-STG212 (ARM11MPCore)",
     .init = ox820_stg212_init,
-    .is_default = 1,
+    .is_default = 1
 };
 
 static void ox820_machine_init(void)
