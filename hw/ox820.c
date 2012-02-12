@@ -154,16 +154,16 @@ static void ox820_init(ram_addr_t ram_size,
         cpu_pic1 = arm_pic_init_cpu(env1);
     }
 
-    dev = qdev_create(NULL, "mpcore-periph");
+    dev = qdev_create(NULL, "arm11mpcore_priv"/*"mpcore-periph"*/);
     qdev_prop_set_uint32(dev, "num-cpu", num_cpus > 1 ? 2 : 1);
     qdev_prop_set_uint32(dev, "num-irq", 64);
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
     memory_region_add_subregion(main_1gb_region, 0x07000000, sysbus_mmio_get_region(busdev, 0));
-    sysbus_connect_irq(busdev, 0, cpu_pic0[ARM_PIC_CPU_FIQ]);
+    sysbus_connect_irq(busdev, 0, cpu_pic0[ARM_PIC_CPU_IRQ]);
     if(num_cpus > 1)
     {
-        sysbus_connect_irq(busdev, 1, cpu_pic1[ARM_PIC_CPU_FIQ]);
+        sysbus_connect_irq(busdev, 1, cpu_pic1[ARM_PIC_CPU_IRQ]);
     }
 
     for (i = 32; i < 64; i++) {
