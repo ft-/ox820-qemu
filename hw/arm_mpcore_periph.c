@@ -274,11 +274,13 @@ static void gic_end_of_irq(periph_state* s, int cpu, uint32_t irq)
     if(irq < 32)
     {
         s->dist.abr_int[cpu] &= ~(1u << irq);
+        s->dist.pending_irq_int[cpu] &= ~(1u << irq);
     }
     else
     {
         irq -= 32;
         s->dist.abr_ext[cpu][irq / 32] &= ~(1u << (irq & 31));
+        s->dist.pending_irq_ext[irq / 32] &= ~(1u << (irq & 31));
     }
     gic_irq_update(s);
 }
