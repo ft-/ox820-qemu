@@ -471,8 +471,7 @@ static uint64_t scu_read(void* opaque, target_phys_addr_t offset, unsigned size)
             break;
 
         case SCU_OFS_CONFIG >> 2:
-            c = gic_current_cpu();
-            c |= (((1u << s->num_cpu) - 1) << 4);
+            c |= (s->num_cpu - 1);
             break;
     }
 
