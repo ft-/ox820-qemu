@@ -276,6 +276,20 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     memory_region_add_subregion(main_1gb_region, 0x01C00000, sysbus_mmio_get_region(busdev, 0));
 
     /*=========================================================================*/
+    /* SATAPHY */
+    dev = qdev_create(NULL, "ox820-sataphy");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(main_1gb_region, 0x04900000, sysbus_mmio_get_region(busdev, 0));
+
+    /*=========================================================================*/
+    /* PCIEPHY */
+    dev = qdev_create(NULL, "ox820-pciephy");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(main_1gb_region, 0x04A00000, sysbus_mmio_get_region(busdev, 0));
+
+    /*=========================================================================*/
     /* UARTs */
     if (serial_hds[0]) {
         splitirq[0] = qemu_irq_split(rpsa_pic[23], rpsc_pic[23]);
