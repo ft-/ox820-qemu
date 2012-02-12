@@ -1076,13 +1076,22 @@ static int periph_init(SysBusDevice *dev)
     memory_region_init_io(&s->scu_iomem, &scu_ops, s, "scu", 0x100);
     memory_region_init_io(&s->gic_iomem[4], &gic_this_ops, s, "gic_local", 0x100);
     memory_region_init_io(&s->gic_iomem[0], &gic_0_ops, s, "gic_cpu0", 0x100);
-    memory_region_init_io(&s->gic_iomem[1], &gic_1_ops, s, "gic_cpu1", 0x100);
-    memory_region_init_io(&s->gic_iomem[2], &gic_2_ops, s, "gic_cpu2", 0x100);
-    memory_region_init_io(&s->gic_iomem[3], &gic_3_ops, s, "gic_cpu3", 0x100);
-    memory_region_init_io(&s->dist_iomem, &dist_ops, s, "dist", 0x1000);
+    if(s->num_cpu > 1)
+    {
+        memory_region_init_io(&s->gic_iomem[1], &gic_1_ops, s, "gic_cpu1", 0x100);
+    }
+    if(s->num_cpu > 2)
+    {
+        memory_region_init_io(&s->gic_iomem[2], &gic_2_ops, s, "gic_cpu2", 0x100);
+    }
+    if(s->num_cpu > 3)
+    {
+        memory_region_init_io(&s->gic_iomem[3], &gic_3_ops, s, "gic_cpu3", 0x100);
+    }
+    memory_region_init_io(&s->dist_iomem, &dist_ops, s, "gic_dist", 0x1000);
     memory_region_add_subregion(&s->iomem, 0x0000, &s->scu_iomem);
     memory_region_add_subregion(&s->iomem, 0x0100, &s->gic_iomem[4]);
-    for(n = 0; n < 4; ++n)
+    for(n = 0; n < s->num_cpu; ++n)
     {
         memory_region_add_subregion(&s->iomem, 0x0100 * (n + 2), &s->gic_iomem[n]);
     }
