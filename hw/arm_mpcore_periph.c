@@ -723,19 +723,18 @@ static void dist_write(void* opaque, target_phys_addr_t offset, uint64_t value, 
                 uint8_t* iptr;
                 if(bank == 0)
                 {
-                    iptr = &s->dist.iptr_int[cpu][offset - DIST_OFS_IPTR_START];
                 }
                 else
                 {
                     iptr = &s->dist.iptr_ext[offset - DIST_OFS_IPTR_START - 32];
-                }
 
-                while(size-- != 0)
-                {
-                    *(iptr++) = (uint8_t) value;
-                    value >>= 8;
+                    while(size-- != 0)
+                    {
+                        *(iptr++) = (uint8_t) value;
+                        value >>= 8;
+                    }
+                    gic_irq_update(s);
                 }
-                gic_irq_update(s);
             }
             else if(offset < DIST_OFS_ICFR_START)
             {
@@ -903,7 +902,7 @@ static int periph_init(SysBusDevice *dev)
 {
     periph_state *s = FROM_SYSBUS(periph_state, dev);
     SysBusDevice *busdev;
-    unsigned int n;
+    unsigned int n, j;
 
     if(s->num_cpu < 1 || s->num_cpu > MAX_MPCORE_CPUS)
     {
@@ -973,6 +972,11 @@ static int periph_init(SysBusDevice *dev)
         s->cpu[n].pmr = 0;
         s->cpu[n].bpr = 0;
         s->dist.ier_int[n] = 0;
+        /* IPTR of interrupts 0-31 are fixed */
+        for(j = 0; j < 32; ++j)
+        {
+            s->dist.iptr_int[n][j] = (1u << n);
+        }
     }
     for(n = 0; n < MAX_DIST_EXT_INT_STATE_VARS; ++n)
     {
