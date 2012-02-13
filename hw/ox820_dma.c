@@ -79,6 +79,8 @@
 #define OFS_DMA_INT_AND_VERSION     0x1C
 
 #define OFS_SGDMA_CONTROL           0x00
+#define MSK_SGDMA_CONTROL_PRD_TABLE         (1 << 5)
+#define MSK_SGDMA_CONTROL_CLR_LAST_IRQ      (1 << 4)
 #define MSK_SGDMA_CONTROL_BURST_TYPE        (1 << 2)
 #define MSK_SGDMA_CONTROL_QUEUING_ENABLE    (1 << 1)
 #define MSK_SGDMA_CONTROL_START             (1 << 0)
@@ -159,6 +161,15 @@ typedef struct ox820_dma_state {
     uint32_t        last_low_prio_ch;
 } ox820_dma_state;
 
+static void ox820_dma_int_update(ox820_dma_state* s)
+{
+    unsigned int n;
+    for(n = 0; n < s->num_channels; ++n)
+    {
+        qemu_set_irq(s->dma_irq[n], s->int_out & (1u << n));
+    }
+}
+
 static void ox820_sgdma_reset_ch(ox820_dma_state* s, unsigned int ch)
 {
     ox820_sgdma_channel_state* sgchannel = &s->sgchannel[ch];
@@ -189,6 +200,7 @@ static void ox820_dma_reset(ox820_dma_state* s)
         ox820_dma_reset_ch(s, n);
     }
     s->int_out = 0;
+    ox820_dma_int_update(s);
 }
 
 static void ox820_dma_schedule(ox820_dma_state* s)
@@ -613,6 +625,7 @@ static int ox820_dma_ch_run(ox820_dma_state* s, ox820_dma_channel_state* channel
                 if(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_INT_ENABLE)
                 {
                     s->int_out |= (1u << channel->dma_ch_number);
+                    ox820_dma_int_update(s);
                 }
                 channel->dma_ctrl_stat &= ~MSK_DMA_CTRL_STAT_DMA_IN_PROGRESS;
             }
@@ -655,7 +668,9 @@ static int ox820_sgdma_check(ox820_dma_state* s)
                 ox820_dma_channel_state* dmachannel = &s->channel[(sgchannel->sgdma_info.qualifier & MSK_OX820_DMA_SG_QUALIFIER_CHANNEL) >> BIT_OX820_DMA_SG_QUALIFIER_CHANNEL];
                 if(0 == sgchannel->sgdma_info.src_entries || 0 == sgchannel->sgdma_info.dst_entries)
                 {
+                    s->int_out |= (1 << ((sgchannel->sgdma_info.qualifier & MSK_OX820_DMA_SG_QUALIFIER_CHANNEL) >> BIT_OX820_DMA_SG_QUALIFIER_CHANNEL));
                     sgchannel->sgdma_status &= (~MSK_SGDMA_STATUS_BUSY);
+                    ox820_dma_int_update(s);
                 }
                 else if(!(dmachannel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_NEXT_FREE))
                 {
@@ -702,7 +717,7 @@ static int ox820_sgdma_check(ox820_dma_state* s)
                     {
                         dmachannel->dma_byte_count |= MSK_DMA_BYTECOUNT_RD_EOT;
                     }
-                    dmachannel->dma_ctrl_stat = sgchannel->sgdma_info.control & MSK_DMA_CTRL_STAT_RW_MASK;
+                    dmachannel->dma_ctrl_stat = sgchannel->sgdma_info.control & MSK_DMA_CTRL_STAT_RW_MASK & ~MSK_DMA_CTRL_STAT_INT_ENABLE;
                     ox820_dma_ch_start(s, dmachannel);
                 }
             }
@@ -859,6 +874,7 @@ static void ox820_dma_write(void *opaque, target_phys_addr_t offset,
                     if(!(channel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_CLEAR_INT_REG_EN))
                     {
                         s->int_out &= ~(1u << ch);
+                        ox820_dma_int_update(s);
                     }
                 }
                 break;
@@ -871,6 +887,7 @@ static void ox820_dma_write(void *opaque, target_phys_addr_t offset,
                     if(!(channel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_CLEAR_INT_REG_EN))
                     {
                         s->int_out &= ~(1u << ch);
+                        ox820_dma_int_update(s);
                     }
                 }
                 break;
@@ -997,6 +1014,11 @@ static int ox820_dma_init(SysBusDevice *dev)
         hw_error("ox820_dma: num-channel exceeds 16\n");
         return 1;
     }
+    if(s->num_channels < 1)
+    {
+        hw_error("ox820_dma: num-channel should be at least 1\n");
+        return 1;
+    }
     memory_region_init(&s->iomem, "ox820-dma", 0x20000);
     memory_region_init(&s->iomem_dma, "dma", 0x20 * s->num_channels);
     memory_region_add_subregion(&s->iomem, 0x00000000, &s->iomem_dma);
@@ -1007,6 +1029,7 @@ static int ox820_dma_init(SysBusDevice *dev)
     s->channel = g_new(ox820_dma_channel_state, s->num_channels);
     s->sgchannel = g_new(ox820_sgdma_channel_state, s->num_channels);
     s->dma_irq = g_new(qemu_irq, s->num_channels);
+    memset(s->dma_irq, 0, sizeof(qemu_irq) * s->num_channels);
     for(n = 0; n < s->num_channels; ++n)
     {
         char name[20];
