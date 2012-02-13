@@ -380,10 +380,18 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
     memory_region_add_subregion(main_1gb_region, 0x05600000, sysbus_mmio_get_region(busdev, 0));
-    sysbus_connect_irq(busdev, 0, reset_irq[0]);
-    sysbus_connect_irq(busdev, 0, reset_irq[0]);
-    sysbus_connect_irq(busdev, 0, reset_irq[0]);
-    sysbus_connect_irq(busdev, 0, reset_irq[0]);
+    splitirq[0] = qemu_irq_split(rpsa_pic[13], rpsc_pic[13]);
+    splitirq[0] = qemu_irq_split(gic_pic[45], splitirq[0]);
+    sysbus_connect_irq(busdev, 0, splitirq[0]);
+    splitirq[0] = qemu_irq_split(rpsa_pic[14], rpsc_pic[14]);
+    splitirq[0] = qemu_irq_split(gic_pic[46], splitirq[0]);
+    sysbus_connect_irq(busdev, 1, splitirq[0]);
+    splitirq[0] = qemu_irq_split(rpsa_pic[15], rpsc_pic[15]);
+    splitirq[0] = qemu_irq_split(gic_pic[47], splitirq[0]);
+    sysbus_connect_irq(busdev, 2, splitirq[0]);
+    splitirq[0] = qemu_irq_split(rpsa_pic[16], rpsc_pic[16]);
+    splitirq[0] = qemu_irq_split(gic_pic[48], splitirq[0]);
+    sysbus_connect_irq(busdev, 3, splitirq[0]);
     sysbus_connect_irq(sysctrl_busdev, 8, qdev_get_gpio_in(dev, 0));   /* RSTEN */
     sysbus_connect_irq(sysctrl_busdev, 32 + 1, qdev_get_gpio_in(dev, 1));   /* CKEN */
 
