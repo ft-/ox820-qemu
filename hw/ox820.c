@@ -396,6 +396,17 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     sysbus_connect_irq(sysctrl_busdev, 32 + 1, qdev_get_gpio_in(dev, 1));   /* CKEN */
 
     /*=========================================================================*/
+    /* SATA */
+    dev = qdev_create(NULL, "ox820-sata");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(main_1gb_region, 0x05900000, sysbus_mmio_get_region(busdev, 0));
+    splitirq[0] = qemu_irq_split(rpsa_pic[18], rpsc_pic[18]);
+    splitirq[0] = qemu_irq_split(gic_pic[50], splitirq[0]);
+    sysbus_connect_irq(busdev, 0, splitirq[0]);
+    sysbus_connect_irq(sysctrl_busdev, 11, qdev_get_gpio_in(dev, 0));   /* RSTEN */
+    sysbus_connect_irq(sysctrl_busdev, 32 + 4, qdev_get_gpio_in(dev, 1));   /* CKEN */
+    /*=========================================================================*/
     /* Boot Config */
     for (i = 0; i < ARRAY_SIZE(emptyboot); i++) {
         emptyboot[i] = tswap32(emptyboot[i]);
