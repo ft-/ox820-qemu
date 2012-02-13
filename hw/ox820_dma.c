@@ -8,6 +8,7 @@
 
 #include "sysbus.h"
 #include "cpu-common.h"
+#include "ox820_dma.h"
 
 #define OFS_DMA_CTRL_STAT           0x00
 #define MSK_DMA_CTRL_STAT_CLEAR_INT_REG_EN      (1 << 30)
@@ -29,6 +30,8 @@
 #define MSK_DMA_CTRL_STAT_INC_ADDR_D            (1 << 16)
 #define MSK_DMA_CTRL_STAT_INC_ADDR_S            (1 << 15)
 #define MSK_DMA_CTRL_STAT_DIRECTION             (2 << 13)
+#define MSK_DMA_CTRL_STAT_DIRECTION_SRC_SELECT  (1 << 13)
+#define MSK_DMA_CTRL_STAT_DIRECTION_DST_SELECT  (1 << 14)
 #define MSK_DMA_CTRL_STAT_CH_RESET              (1 << 12)
 #define MSK_DMA_CTRL_STAT_NEXT_FREE             (1 << 11)
 #define MSK_DMA_CTRL_STAT_INT                   (1 << 10)
@@ -88,6 +91,16 @@
 #define OFS_SGDMA_STATUS            0x04
 #define MSK_SGDMA_STATUS_BUSY               (1 << 7)
 #define MSK_SGDMA_STATUS_ERROR_CODE         (0x3F << 0)
+#define VAL_SGDMA_STATUS_ERROR_CODE_REQ_QUAL_NOT_1          0x10    /* up to 0x1F */
+#define VAL_SGDMA_STATUS_ERROR_CODE_DST_IS_NULL             0x21    /* dest pointer is NULL */
+#define VAL_SGDMA_STATUS_ERROR_CODE_SRC_IS_NULL             0x22    /* src pointer is NULL */
+#define VAL_SGDMA_STATUS_ERROR_CODE_DST_AND_SRC_IS_NULL     0x23    /* dest & src pointer is NULL */
+#define VAL_SGDMA_STATUS_ERROR_CODE_OUT_OF_DST_1            0x35
+#define VAL_SGDMA_STATUS_ERROR_CODE_OUT_OF_DST_2            0x37
+#define VAL_SGDMA_STATUS_ERROR_CODE_OUT_OF_DST_3            0x3C
+#define VAL_SGDMA_STATUS_ERROR_CODE_OUT_OF_SRC_1            0x3A
+#define VAL_SGDMA_STATUS_ERROR_CODE_OUT_OF_SRC_2            0x3B
+#define VAL_SGDMA_STATUS_ERROR_CODE_OUT_OF_SRC_3            0x3E
 
 #define OFS_SGDMA_REQPOINTER        0x08
 #define OFS_SGDMA_SUB_BLOCK_RESETS  0x0C
@@ -107,6 +120,14 @@ typedef struct
     uint32_t                src_entries;
     uint32_t                dst_entries;
 } ox820_sgdma_sg_info_t;
+
+typedef struct
+{
+    uint32_t                address;
+    uint32_t                flags_len;
+} ox820_sgdma_prd_entry_t;
+
+#define MSK_OX820_SGDMA_PRD_EOT     (1 << 31)
 
 /* qualifier */
 #define MSK_OX820_DMA_SG_QUALIFIER_VAL          0x0000FFFF
@@ -139,6 +160,8 @@ typedef struct {
     ox820_sgdma_sg_info_t   sgdma_info;
     ox820_sgdma_sg_entry_t  sgdma_src_entry;
     ox820_sgdma_sg_entry_t  sgdma_dst_entry;
+    ox820_sgdma_prd_entry_t prd_src_entry;
+    ox820_sgdma_prd_entry_t prd_dst_entry;
 } ox820_sgdma_channel_state;
 
 typedef struct ox820_dma_state {
@@ -159,6 +182,13 @@ typedef struct ox820_dma_state {
     uint32_t        dma_running;
     uint32_t        last_high_prio_ch;
     uint32_t        last_low_prio_ch;
+
+    struct
+    {
+        void (* readblock)(void* opaque, target_phys_addr_t, void* buf, int len);
+        void (* writeblock)(void* opaque, target_phys_addr_t, const void* buf, int len);
+        void* opaque;
+    } busb;
 } ox820_dma_state;
 
 static void ox820_dma_int_update(ox820_dma_state* s)
@@ -220,55 +250,74 @@ static void ox820_dma_ch_start(ox820_dma_state* s, ox820_dma_channel_state* chan
     }
 }
 
+static void ox820_dma_phys_mem_read(ox820_dma_state* s, ox820_dma_channel_state* channel, target_phys_addr_t physaddr, void* buf, int len)
+{
+    if((channel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_DIRECTION_SRC_SELECT) &&
+        NULL != s->busb.readblock)
+    {
+        s->busb.readblock(s->busb.opaque, physaddr, buf, len);
+    }
+    else
+    {
+        cpu_physical_memory_read(physaddr, buf, len);
+    }
+}
+
+static void ox820_dma_phys_mem_write(ox820_dma_state* s, ox820_dma_channel_state* channel, target_phys_addr_t physaddr, const void* buf, int len)
+{
+    if((channel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_DIRECTION_DST_SELECT) &&
+        NULL != s->busb.writeblock)
+    {
+        s->busb.writeblock(s->busb.opaque, physaddr, buf, len);
+    }
+    else
+    {
+        cpu_physical_memory_write(physaddr, buf, len);
+    }
+}
+
 static void ox820_dma_ch_read_fixed(ox820_dma_state* s, ox820_dma_channel_state* channel, void* _buf, unsigned int bytes)
 {
     uint8_t* buf = _buf;
-    uint32_t val;
     switch(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_DEVICE_TYPE_S)
     {
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_S_8BIT:
             while(bytes--)
             {
-                *(buf++) = (uint8_t) ldub_phys(channel->dma_current_src_addr);
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, 1);
+                buf += 1;
             }
             break;
 
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_S_16BIT:
             while(bytes > 0)
             {
-                val = (uint32_t) lduw_le_phys(channel->dma_current_src_addr);
-                *(buf++) = val & 0xFF;
-                *(buf++) = (val >> 8) & 0xFF;
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, 2);
+                buf += 2;
                 bytes -= 2;
             }
             if(bytes > 0)
             {
-                val = (uint32_t) lduw_le_phys(channel->dma_current_src_addr);
-                *(buf++) = val & 0xFF;
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, 1);
             }
             break;
 
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_S_32BIT:
             while(bytes > 3)
             {
-                val = (uint32_t) ldl_le_phys(channel->dma_current_src_addr);
-                *(buf++) = val & 0xFF;
-                *(buf++) = (val >> 8) & 0xFF;
-                *(buf++) = (val >> 16) & 0xFF;
-                *(buf++) = (val >> 24) & 0xFF;
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, 4);
+                buf += 4;
                 bytes -= 4;
             }
             if(bytes > 1)
             {
-                val = (uint32_t) ldl_le_phys(channel->dma_current_src_addr);
-                *(buf++) = val & 0xFF;
-                *(buf++) = (val >> 8) & 0xFF;
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, 2);
+                buf += 2;
                 bytes -= 2;
             }
             if(bytes > 0)
             {
-                val = (uint32_t) ldl_le_phys(channel->dma_current_src_addr);
-                *(buf++) = val & 0xFF;
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, 1);
             }
             break;
     }
@@ -276,51 +325,44 @@ static void ox820_dma_ch_read_fixed(ox820_dma_state* s, ox820_dma_channel_state*
 
 static void ox820_dma_ch_write_fixed(ox820_dma_state* s, ox820_dma_channel_state* channel, const void* _buf, unsigned int bytes)
 {
-    uint32_t val;
     const uint8_t* buf = _buf;
     switch(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_DEVICE_TYPE_D)
     {
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_D_8BIT:
             while(bytes--)
             {
-                stb_phys(channel->dma_current_dst_addr, *(buf++));
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, 1);
+                buf += 1;
             }
             break;
 
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_D_16BIT:
             while(bytes > 0)
             {
-                val = *(buf++);
-                val |= (*(buf++) << 8);
-                stw_le_phys(channel->dma_current_dst_addr, val);
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, 2);
+                buf += 2;
                 bytes -= 2;
             }
             if(bytes > 0)
             {
-                val = *(buf++);
-                stw_le_phys(channel->dma_current_dst_addr, val);
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, 1);
             }
             break;
 
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_D_32BIT:
             while(bytes > 3)
             {
-                val = *(buf++);
-                val |= (*(buf++) << 8);
-                val |= (*(buf++) << 16);
-                val |= (*(buf++) << 24);
-                stl_le_phys(channel->dma_current_dst_addr, val);
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, 4);
+                buf += 4;
             }
             if(bytes > 1)
             {
-                val = *(buf++);
-                val |= (*(buf++) << 8);
-                stl_le_phys(channel->dma_current_dst_addr, val);
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, 2);
+                buf += 2;
             }
             if(bytes > 0)
             {
-                val = *(buf++);
-                stl_le_phys(channel->dma_current_dst_addr, val);
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, 1);
             }
             break;
     }
@@ -329,13 +371,13 @@ static void ox820_dma_ch_write_fixed(ox820_dma_state* s, ox820_dma_channel_state
 static void ox820_dma_ch_read_inclow4(ox820_dma_state* s, ox820_dma_channel_state* channel, void* _buf, unsigned int bytes)
 {
     uint8_t* buf = _buf;
-    uint32_t val;
     switch(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_DEVICE_TYPE_S)
     {
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_S_8BIT:
             while(bytes--)
             {
-                *(buf++) = (uint8_t) ldub_phys(channel->dma_current_src_addr);
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, 1);
+                buf += 1;
                 channel->dma_current_src_addr = ((channel->dma_current_src_addr + 4) & 0xF) | (channel->dma_current_src_addr & 0xFFFFFFF0);
             }
             break;
@@ -343,22 +385,21 @@ static void ox820_dma_ch_read_inclow4(ox820_dma_state* s, ox820_dma_channel_stat
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_S_16BIT:
             if((channel->dma_current_src_addr & 1) && bytes > 0)
             {
-                *(buf++) = (uint8_t) ldub_phys(channel->dma_current_src_addr);
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, 1);
+                buf += 1;
                 channel->dma_current_src_addr = ((channel->dma_current_src_addr + 3) & 0xF) | (channel->dma_current_src_addr & 0xFFFFFFF0);
                 bytes -= 1;
             }
             while(bytes > 1)
             {
-                val = (uint32_t) lduw_le_phys(channel->dma_current_src_addr);
-                *(buf++) = val & 0xFF;
-                *(buf++) = (val >> 8) & 0xFF;
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, 2);
+                buf += 2;
                 bytes -= 2;
                 channel->dma_current_src_addr = ((channel->dma_current_src_addr + 4) & 0xF) | (channel->dma_current_src_addr & 0xFFFFFFF0);
             }
             if(bytes > 0)
             {
-                val = (uint32_t) lduw_le_phys(channel->dma_current_src_addr);
-                *(buf++) = val & 0xFF;
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, 1);
                 channel->dma_current_src_addr = ((channel->dma_current_src_addr + 1) & 0xF) | (channel->dma_current_src_addr & 0xFFFFFFF0);
             }
             break;
@@ -366,26 +407,22 @@ static void ox820_dma_ch_read_inclow4(ox820_dma_state* s, ox820_dma_channel_stat
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_S_32BIT:
             while(bytes > 3)
             {
-                val = (uint32_t) ldl_le_phys(channel->dma_current_src_addr);
-                *(buf++) = val & 0xFF;
-                *(buf++) = (val >> 8) & 0xFF;
-                *(buf++) = (val >> 16) & 0xFF;
-                *(buf++) = (val >> 24) & 0xFF;
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, 4);
+                buf += 4;
                 bytes -= 4;
                 channel->dma_current_src_addr = ((channel->dma_current_src_addr + 4) & 0xF) | (channel->dma_current_src_addr & 0xFFFFFFF0);
             }
             if(bytes > 1)
             {
-                val = (uint32_t) ldl_le_phys(channel->dma_current_src_addr);
-                *(buf++) = val & 0xFF;
-                *(buf++) = (val >> 8) & 0xFF;
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, 2);
+                buf += 2;
                 bytes -= 2;
                 channel->dma_current_src_addr = ((channel->dma_current_src_addr + 2) & 0xF) | (channel->dma_current_src_addr & 0xFFFFFFF0);
             }
             if(bytes > 0)
             {
-                val = (uint32_t) ldl_le_phys(channel->dma_current_src_addr);
-                *(buf++) = val & 0xFF;
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, 1);
+                buf += 1;
                 channel->dma_current_src_addr = ((channel->dma_current_src_addr + 1) & 0xF) | (channel->dma_current_src_addr & 0xFFFFFFF0);
             }
             break;
@@ -394,14 +431,14 @@ static void ox820_dma_ch_read_inclow4(ox820_dma_state* s, ox820_dma_channel_stat
 
 static void ox820_dma_ch_write_inclow4(ox820_dma_state* s, ox820_dma_channel_state* channel, const void* _buf, unsigned int bytes)
 {
-    uint32_t val;
     const uint8_t* buf = _buf;
     switch(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_DEVICE_TYPE_D)
     {
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_D_8BIT:
             while(bytes--)
             {
-                stb_phys(channel->dma_current_dst_addr, *(buf++));
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, 1);
+                buf += 1;
                 channel->dma_current_dst_addr = ((channel->dma_current_dst_addr + 4) & 0xF) | (channel->dma_current_dst_addr & 0xFFFFFFF0);
             }
             break;
@@ -409,22 +446,22 @@ static void ox820_dma_ch_write_inclow4(ox820_dma_state* s, ox820_dma_channel_sta
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_D_16BIT:
             if((channel->dma_current_dst_addr & 1) && bytes > 0)
             {
-                stb_phys(channel->dma_current_dst_addr, *(buf++));
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, 1);
+                buf += 1;
                 channel->dma_current_dst_addr = ((channel->dma_current_dst_addr + 1) & 0xF) | (channel->dma_current_dst_addr & 0xFFFFFFF0);
                 bytes -= 1;
             }
             while(bytes > 1)
             {
-                val = *(buf++);
-                val |= (*(buf++) << 8);
-                stw_le_phys(channel->dma_current_dst_addr, val);
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, 2);
+                buf += 2;
                 bytes -= 2;
                 channel->dma_current_dst_addr = ((channel->dma_current_dst_addr + 4) & 0xF) | (channel->dma_current_dst_addr & 0xFFFFFFF0);
             }
             if(bytes > 0)
             {
-                val = *(buf++);
-                stw_le_phys(channel->dma_current_dst_addr, val);
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, 1);
+                buf += 1;
                 channel->dma_current_dst_addr = ((channel->dma_current_dst_addr + 1) & 0xF) | (channel->dma_current_dst_addr & 0xFFFFFFF0);
             }
             break;
@@ -432,24 +469,20 @@ static void ox820_dma_ch_write_inclow4(ox820_dma_state* s, ox820_dma_channel_sta
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_D_32BIT:
             while(bytes > 3)
             {
-                val = *(buf++);
-                val |= (*(buf++) << 8);
-                val |= (*(buf++) << 16);
-                val |= (*(buf++) << 24);
-                stl_le_phys(channel->dma_current_dst_addr, val);
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, 4);
+                buf += 4;
                 channel->dma_current_dst_addr = ((channel->dma_current_dst_addr + 4) & 0xF) | (channel->dma_current_dst_addr & 0xFFFFFFF0);
             }
             if(bytes > 1)
             {
-                val = *(buf++);
-                val |= (*(buf++) << 8);
-                stl_le_phys(channel->dma_current_dst_addr, val);
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, 2);
+                buf += 2;
                 channel->dma_current_dst_addr = ((channel->dma_current_dst_addr + 2) & 0xF) | (channel->dma_current_dst_addr & 0xFFFFFFF0);
             }
             if(bytes > 0)
             {
-                val = *(buf++);
-                stl_le_phys(channel->dma_current_dst_addr, val);
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, 1);
+                buf += 1;
                 channel->dma_current_dst_addr = ((channel->dma_current_dst_addr + 1) & 0xF) | (channel->dma_current_dst_addr & 0xFFFFFFF0);
             }
             break;
@@ -464,7 +497,7 @@ static void ox820_dma_ch_read_inc(ox820_dma_state* s, ox820_dma_channel_state* c
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_S_8BIT:
             {
                 uint8_t workbuf[bytes * 4];
-                cpu_physical_memory_read(channel->dma_current_src_addr, workbuf, bytes * 4);
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, workbuf, bytes * 4);
                 unsigned int n;
                 for(n = 0; n < bytes; ++n)
                 {
@@ -478,7 +511,7 @@ static void ox820_dma_ch_read_inc(ox820_dma_state* s, ox820_dma_channel_state* c
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_S_16BIT:
             {
                 uint8_t workbuf[bytes * 2];
-                cpu_physical_memory_read(channel->dma_current_src_addr, workbuf, bytes * 2);
+                ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, workbuf, bytes * 2);
                 unsigned int n;
                 for(n = 0; n < bytes; ++n)
                 {
@@ -490,7 +523,7 @@ static void ox820_dma_ch_read_inc(ox820_dma_state* s, ox820_dma_channel_state* c
             break;
 
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_S_32BIT:
-            cpu_physical_memory_read(channel->dma_current_src_addr, buf, bytes);
+            ox820_dma_phys_mem_read(s, channel, channel->dma_current_src_addr, buf, bytes);
             channel->dma_current_src_addr = (channel->dma_current_src_addr + bytes) & 0xFFFFFFFF;
             break;
     }
@@ -512,7 +545,7 @@ static void ox820_dma_ch_write_inc(ox820_dma_state* s, ox820_dma_channel_state* 
                     workbuf[n * 4 + 2] = *(buf);
                     workbuf[n * 4 + 3] = *(buf++);
                 }
-                cpu_physical_memory_write(channel->dma_current_src_addr, workbuf, bytes * 4);
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_src_addr, workbuf, bytes * 4);
             }
             channel->dma_current_dst_addr = (channel->dma_current_dst_addr + 4 * bytes) & 0xFFFFFFFF;
             break;
@@ -526,13 +559,13 @@ static void ox820_dma_ch_write_inc(ox820_dma_state* s, ox820_dma_channel_state* 
                     workbuf[n * 4] = *(buf);
                     workbuf[n * 4 + 1] = *(buf++);
                 }
-                cpu_physical_memory_write(channel->dma_current_src_addr, workbuf, bytes * 2);
+                ox820_dma_phys_mem_write(s, channel, channel->dma_current_src_addr, workbuf, bytes * 2);
             }
             channel->dma_current_dst_addr = (channel->dma_current_dst_addr + 2 * bytes) & 0xFFFFFFFF;
             break;
 
         case VAL_DMA_CTRL_STAT_DEVICE_TYPE_D_32BIT:
-            cpu_physical_memory_write(channel->dma_current_dst_addr, buf, bytes);
+            ox820_dma_phys_mem_write(s, channel, channel->dma_current_dst_addr, buf, bytes);
             channel->dma_current_dst_addr = (channel->dma_current_dst_addr + bytes) & 0xFFFFFFFF;
             break;
     }
@@ -653,6 +686,10 @@ static int ox820_sgdma_check(ox820_dma_state* s)
                 sgchannel->sgdma_src_entry.length = 0;    /* 0 => loading next entry */
                 sgchannel->sgdma_dst_entry.length = 0;    /* 0 => loading next entry */
                 cpu_physical_memory_read(sgchannel->sgdma_reqpointer, &sgchannel->sgdma_info, sizeof(sgchannel->sgdma_info));
+                sgchannel->sgdma_info.src_entries = tswap32(sgchannel->sgdma_info.src_entries);
+                sgchannel->sgdma_info.dst_entries = tswap32(sgchannel->sgdma_info.dst_entries);
+                sgchannel->sgdma_info.control = tswap32(sgchannel->sgdma_info.control);
+                sgchannel->sgdma_info.qualifier = tswap32(sgchannel->sgdma_info.qualifier);
                 sgchannel->sgdma_src_entry.next = sgchannel->sgdma_info.src_entries;
                 sgchannel->sgdma_dst_entry.next = sgchannel->sgdma_info.dst_entries;
                 sgchannel->sgdma_status |= MSK_SGDMA_STATUS_BUSY;
@@ -663,13 +700,96 @@ static int ox820_sgdma_check(ox820_dma_state* s)
                 /* channel invalid so stop */
                 sgchannel->sgdma_status &= (~MSK_SGDMA_STATUS_BUSY);
             }
-            else
+            else if(sgchannel->sgdma_control & MSK_SGDMA_CONTROL_PRD_TABLE)
             {
+                /* PRD tables */
                 ox820_dma_channel_state* dmachannel = &s->channel[(sgchannel->sgdma_info.qualifier & MSK_OX820_DMA_SG_QUALIFIER_CHANNEL) >> BIT_OX820_DMA_SG_QUALIFIER_CHANNEL];
-                if(0 == sgchannel->sgdma_info.src_entries || 0 == sgchannel->sgdma_info.dst_entries)
+                if((sgchannel->prd_src_entry.flags_len & MSK_OX820_SGDMA_PRD_EOT) ||
+                   (sgchannel->prd_dst_entry.flags_len & MSK_OX820_SGDMA_PRD_EOT))
                 {
                     s->int_out |= (1 << ((sgchannel->sgdma_info.qualifier & MSK_OX820_DMA_SG_QUALIFIER_CHANNEL) >> BIT_OX820_DMA_SG_QUALIFIER_CHANNEL));
                     sgchannel->sgdma_status &= (~MSK_SGDMA_STATUS_BUSY);
+                    if(0 != sgchannel->sgdma_info.src_entries)
+                    {
+                        sgchannel->sgdma_status |= VAL_SGDMA_STATUS_ERROR_CODE_OUT_OF_SRC_1;
+                    }
+                    else if(0 != sgchannel->sgdma_info.dst_entries)
+                    {
+                        sgchannel->sgdma_status |= VAL_SGDMA_STATUS_ERROR_CODE_OUT_OF_DST_1;
+                    }
+                    ox820_dma_int_update(s);
+                }
+                else if(!(dmachannel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_NEXT_FREE))
+                {
+                    /* DMA channel does not have next free */
+                }
+                else if((dmachannel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_DMA_IN_PROGRESS) &&
+                        !(sgchannel->sgdma_control & MSK_SGDMA_CONTROL_QUEUING_ENABLE))
+                {
+                    /* DMA channel is busy and SGDMA is not allowed to schedule */
+                }
+                else
+                {
+                    /* schedule new DMA */
+                    if(0 == sgchannel->prd_src_entry.flags_len)
+                    {
+                        cpu_physical_memory_read(sgchannel->sgdma_info.src_entries, &sgchannel->prd_src_entry, sizeof(sgchannel->prd_src_entry));
+                        sgchannel->prd_src_entry.address = tswap32(sgchannel->prd_src_entry.address);
+                        sgchannel->prd_src_entry.flags_len = tswap32(sgchannel->prd_src_entry.flags_len);
+                        dmachannel->dma_base_src_addr = sgchannel->sgdma_src_entry.addr;
+                        sgchannel->sgdma_info.src_entries += 8;
+                    }
+
+                    if(0 == sgchannel->sgdma_dst_entry.length)
+                    {
+                        cpu_physical_memory_read(sgchannel->sgdma_info.dst_entries, &sgchannel->prd_dst_entry, sizeof(sgchannel->prd_dst_entry));
+                        sgchannel->prd_dst_entry.address = tswap32(sgchannel->prd_dst_entry.address);
+                        sgchannel->prd_dst_entry.flags_len = tswap32(sgchannel->prd_dst_entry.flags_len);
+                        dmachannel->dma_base_dst_addr = sgchannel->sgdma_dst_entry.addr;
+                        sgchannel->sgdma_info.dst_entries += 8;
+                    }
+
+                    if((sgchannel->prd_src_entry.flags_len & ~MSK_OX820_SGDMA_PRD_EOT) <
+                       (sgchannel->prd_dst_entry.flags_len & ~MSK_OX820_SGDMA_PRD_EOT))
+                    {
+                        min_length = sgchannel->prd_src_entry.flags_len & ~MSK_OX820_SGDMA_PRD_EOT;
+                    }
+                    else
+                    {
+                        min_length = sgchannel->prd_dst_entry.flags_len & ~MSK_OX820_SGDMA_PRD_EOT;
+                    }
+
+                    sgchannel->prd_src_entry.flags_len -= min_length;
+                    sgchannel->prd_dst_entry.flags_len -= min_length;
+                    dmachannel->dma_byte_count = min_length & MSK_DMA_BYTECOUNT_BYTE_COUNT;
+                    if(sgchannel->sgdma_info.qualifier & MSK_OX820_DMA_SG_QUALIFIER_DST_EOT)
+                    {
+                        dmachannel->dma_byte_count |= MSK_DMA_BYTECOUNT_WR_EOT;
+                    }
+                    if(sgchannel->sgdma_info.qualifier & MSK_OX820_DMA_SG_QUALIFIER_SRC_EOT)
+                    {
+                        dmachannel->dma_byte_count |= MSK_DMA_BYTECOUNT_RD_EOT;
+                    }
+                    dmachannel->dma_ctrl_stat = sgchannel->sgdma_info.control & MSK_DMA_CTRL_STAT_RW_MASK & ~MSK_DMA_CTRL_STAT_INT_ENABLE;
+                    ox820_dma_ch_start(s, dmachannel);
+                }
+            }
+            else
+            {
+                ox820_dma_channel_state* dmachannel = &s->channel[(sgchannel->sgdma_info.qualifier & MSK_OX820_DMA_SG_QUALIFIER_CHANNEL) >> BIT_OX820_DMA_SG_QUALIFIER_CHANNEL];
+                if((0 == (MSK_DMA_BYTECOUNT_BYTE_COUNT & sgchannel->sgdma_src_entry.length) && (MSK_DMA_BYTECOUNT_RD_EOT & sgchannel->sgdma_src_entry.length)) ||
+                   (0 == (MSK_DMA_BYTECOUNT_BYTE_COUNT & sgchannel->sgdma_dst_entry.length) && (MSK_DMA_BYTECOUNT_WR_EOT & sgchannel->sgdma_dst_entry.length)))
+                {
+                    s->int_out |= (1 << ((sgchannel->sgdma_info.qualifier & MSK_OX820_DMA_SG_QUALIFIER_CHANNEL) >> BIT_OX820_DMA_SG_QUALIFIER_CHANNEL));
+                    sgchannel->sgdma_status &= (~MSK_SGDMA_STATUS_BUSY);
+                    if(0 != (MSK_DMA_BYTECOUNT_BYTE_COUNT & sgchannel->sgdma_info.src_entries))
+                    {
+                        sgchannel->sgdma_status |= VAL_SGDMA_STATUS_ERROR_CODE_OUT_OF_SRC_1;
+                    }
+                    else if(0 != (MSK_DMA_BYTECOUNT_BYTE_COUNT & sgchannel->sgdma_info.dst_entries))
+                    {
+                        sgchannel->sgdma_status |= VAL_SGDMA_STATUS_ERROR_CODE_OUT_OF_DST_1;
+                    }
                     ox820_dma_int_update(s);
                 }
                 else if(!(dmachannel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_NEXT_FREE))
@@ -687,13 +807,20 @@ static int ox820_sgdma_check(ox820_dma_state* s)
                     if(0 == sgchannel->sgdma_src_entry.length && 0 != sgchannel->sgdma_src_entry.next)
                     {
                         cpu_physical_memory_read(sgchannel->sgdma_info.src_entries, &sgchannel->sgdma_src_entry, sizeof(sgchannel->sgdma_src_entry));
+                        sgchannel->sgdma_src_entry.addr = tswap32(sgchannel->sgdma_src_entry.addr);
+                        sgchannel->sgdma_src_entry.length = tswap32(sgchannel->sgdma_src_entry.length);
+                        sgchannel->sgdma_src_entry.next = tswap32(sgchannel->sgdma_src_entry.next);
                         dmachannel->dma_base_src_addr = sgchannel->sgdma_src_entry.addr;
                         sgchannel->sgdma_info.src_entries = sgchannel->sgdma_src_entry.next;
                     }
 
-                    if(0 == sgchannel->sgdma_dst_entry.length)
+                    if(0 == sgchannel->sgdma_dst_entry.length && 0 != sgchannel->sgdma_dst_entry.next)
                     {
                         cpu_physical_memory_read(sgchannel->sgdma_info.dst_entries, &sgchannel->sgdma_dst_entry, sizeof(sgchannel->sgdma_dst_entry));
+                        sgchannel->sgdma_dst_entry.addr = tswap32(sgchannel->sgdma_dst_entry.addr);
+                        sgchannel->sgdma_dst_entry.length = tswap32(sgchannel->sgdma_dst_entry.length);
+                        sgchannel->sgdma_dst_entry.next = tswap32(sgchannel->sgdma_dst_entry.next);
+                        dmachannel->dma_base_dst_addr = sgchannel->sgdma_dst_entry.addr;
                         sgchannel->sgdma_info.dst_entries = sgchannel->sgdma_dst_entry.next;
                     }
 
@@ -1029,6 +1156,8 @@ static int ox820_dma_init(SysBusDevice *dev)
     s->channel = g_new(ox820_dma_channel_state, s->num_channels);
     s->sgchannel = g_new(ox820_sgdma_channel_state, s->num_channels);
     s->dma_irq = g_new(qemu_irq, s->num_channels);
+    s->busb.readblock = NULL;
+    s->busb.writeblock = NULL;
     memset(s->dma_irq, 0, sizeof(qemu_irq) * s->num_channels);
     for(n = 0; n < s->num_channels; ++n)
     {
@@ -1056,7 +1185,7 @@ static int ox820_dma_init(SysBusDevice *dev)
 static Property ox820_dma_properties[] = {
     DEFINE_PROP_UINT32("num-channel", ox820_dma_state, num_channels, 4),
     DEFINE_PROP_UINT32("cken", ox820_dma_state, cken, 0),
-    DEFINE_PROP_UINT32("rsten", ox820_dma_state, cken, 1),
+    DEFINE_PROP_UINT32("rsten", ox820_dma_state, rsten, 1),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -1083,3 +1212,26 @@ static void ox820_dma_register_devices(void)
 }
 
 device_init(ox820_dma_register_devices)
+
+DeviceState*
+ox820_dma_initialize(unsigned int num_channel,
+                     uint32_t cken, uint32_t rsten,
+                     void (* readblock_busb)(void* opaque, target_phys_addr_t, void* buf, int len),
+                     void (* writeblock_busb)(void* opaque, target_phys_addr_t, const void* buf, int len),
+                     void* opaque)
+{
+    DeviceState* dev;
+    ox820_dma_state *s;
+    dev = qdev_create(NULL, "ox820-dma");
+    qdev_prop_set_uint32(dev, "num-channel", num_channel);
+    qdev_prop_set_uint32(dev, "cken", cken);
+    qdev_prop_set_uint32(dev, "rsten", rsten);
+    qdev_init_nofail(dev);
+    s = FROM_SYSBUS(ox820_dma_state, sysbus_from_qdev(dev));
+    s->busb.opaque = opaque;
+    s->busb.readblock = readblock_busb;
+    s->busb.writeblock = writeblock_busb;
+
+    return dev;
+}
+
