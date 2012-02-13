@@ -76,6 +76,7 @@ typedef struct {
     uint32_t        old_intline_ext[MAX_DIST_EXT_INT_STATE_VARS];
     uint32_t        icfr_ext[MAX_DIST_EXT_INT_STATE_VARS];
     uint32_t        pending_irq_ext[MAX_DIST_EXT_INT_STATE_VARS];
+    uint32_t        isr_ext[MAX_DIST_EXT_INT_STATE_VARS];
     uint8_t         ipr_ext[MAX_MPCORE_IRQS - 32];
     uint8_t         iptr_ext[MAX_MPCORE_IRQS - 32];
     uint32_t        fiq_pending[4];
@@ -85,6 +86,7 @@ typedef struct {
     uint32_t        pending_irq_int[MAX_MPCORE_CPUS];
     uint32_t        abr_int[MAX_MPCORE_CPUS];
     uint32_t        intline_int[MAX_MPCORE_CPUS];
+    uint32_t        isr_int[MAX_MPCORE_CPUS];
 } gic_dist_state;
 
 typedef struct {
@@ -1021,12 +1023,14 @@ static void periph_reset(DeviceState *d)
         s->cpu[n].pmr = 0x00;
         s->cpu[n].bpr = 0;
         s->dist.ier_int[n] = s->sgi_ier_init;
+        s->dist.isr_int[n] = 0;
     }
     for(n = 0; n < MAX_DIST_EXT_INT_STATE_VARS; ++n)
     {
         s->dist.ier_ext[n] = 0;
         s->dist.ipr_ext[n] = 0;
         s->dist.icfr_ext[n] = 0;
+        s->dist.isr_ext[n] = 0;
     }
 
     /* make iptr default to all valid cpu interfaces set */
@@ -1038,21 +1042,79 @@ static void periph_reset(DeviceState *d)
     gic_irq_update(s);
 }
 
-#if 0
-static const VMStateDescription vmstate_periph_irq = {
+static const VMStateDescription vmstate_periph = {
     .name = "mpcore-periph",
     .version_id = 1,
     .minimum_version_id = 1,
     .minimum_version_id_old = 1,
     .fields      = (VMStateField[]) {
-        VMSTATE_UINT32(int_raw_source, ox820_rps_irq_state),
-        VMSTATE_UINT32(int_enabled, ox820_rps_irq_state),
-        VMSTATE_UINT32(fiq_enabled, ox820_rps_irq_state),
-        VMSTATE_UINT32(fiq_select, ox820_rps_irq_state),
+        VMSTATE_UINT32(scu_control, periph_state),
+        VMSTATE_UINT16(sgi_ier_init, periph_state),
+        /* cpu0 */
+        VMSTATE_UINT32(cpu[0].icr, periph_state),
+        VMSTATE_UINT32(cpu[0].pmr, periph_state),
+        VMSTATE_UINT32(cpu[0].bpr, periph_state),
+        VMSTATE_UINT32(cpu[0].apr, periph_state),
+        VMSTATE_UINT16(cpu[0].intid, periph_state),
+        VMSTATE_UINT16_ARRAY(cpu[0].last_irq, periph_state, MAX_MPCORE_IRQS),
+        VMSTATE_UINT8_ARRAY(cpu[0].last_apr, periph_state, MAX_MPCORE_IRQS),
+        /* cpu1 */
+        VMSTATE_UINT32(cpu[1].icr, periph_state),
+        VMSTATE_UINT32(cpu[1].pmr, periph_state),
+        VMSTATE_UINT32(cpu[1].bpr, periph_state),
+        VMSTATE_UINT32(cpu[1].apr, periph_state),
+        VMSTATE_UINT16(cpu[1].intid, periph_state),
+        VMSTATE_UINT16_ARRAY(cpu[1].last_irq, periph_state, MAX_MPCORE_IRQS),
+        VMSTATE_UINT8_ARRAY(cpu[1].last_apr, periph_state, MAX_MPCORE_IRQS),
+        /* cpu2 */
+        VMSTATE_UINT32(cpu[2].icr, periph_state),
+        VMSTATE_UINT32(cpu[2].pmr, periph_state),
+        VMSTATE_UINT32(cpu[2].bpr, periph_state),
+        VMSTATE_UINT32(cpu[2].apr, periph_state),
+        VMSTATE_UINT16(cpu[2].intid, periph_state),
+        VMSTATE_UINT16_ARRAY(cpu[2].last_irq, periph_state, MAX_MPCORE_IRQS),
+        VMSTATE_UINT8_ARRAY(cpu[2].last_apr, periph_state, MAX_MPCORE_IRQS),
+        /* cpu3 */
+        VMSTATE_UINT32(cpu[3].icr, periph_state),
+        VMSTATE_UINT32(cpu[3].pmr, periph_state),
+        VMSTATE_UINT32(cpu[3].bpr, periph_state),
+        VMSTATE_UINT32(cpu[3].apr, periph_state),
+        VMSTATE_UINT16(cpu[3].intid, periph_state),
+        VMSTATE_UINT16_ARRAY(cpu[3].last_irq, periph_state, MAX_MPCORE_IRQS),
+        VMSTATE_UINT8_ARRAY(cpu[3].last_apr, periph_state, MAX_MPCORE_IRQS),
+        /* dist */
+        VMSTATE_UINT32(dist.dcr, periph_state),
+        VMSTATE_UINT32_ARRAY(dist.ier_ext, periph_state, MAX_DIST_EXT_INT_STATE_VARS),
+        VMSTATE_UINT32_ARRAY(dist.abr_ext[0], periph_state, MAX_DIST_EXT_INT_STATE_VARS),
+        VMSTATE_UINT32_ARRAY(dist.abr_ext[1], periph_state, MAX_DIST_EXT_INT_STATE_VARS),
+        VMSTATE_UINT32_ARRAY(dist.abr_ext[2], periph_state, MAX_DIST_EXT_INT_STATE_VARS),
+        VMSTATE_UINT32_ARRAY(dist.abr_ext[3], periph_state, MAX_DIST_EXT_INT_STATE_VARS),
+        VMSTATE_UINT32_ARRAY(dist.intline_ext, periph_state, MAX_DIST_EXT_INT_STATE_VARS),
+        VMSTATE_UINT32_ARRAY(dist.old_intline_ext, periph_state, MAX_DIST_EXT_INT_STATE_VARS),
+        VMSTATE_UINT32_ARRAY(dist.icfr_ext, periph_state, MAX_DIST_EXT_INT_STATE_VARS),
+        VMSTATE_UINT32_ARRAY(dist.pending_irq_ext, periph_state, MAX_DIST_EXT_INT_STATE_VARS),
+        VMSTATE_UINT8_ARRAY(dist.ipr_ext, periph_state, MAX_MPCORE_IRQS - 32),
+        VMSTATE_UINT8_ARRAY(dist.iptr_ext, periph_state, MAX_MPCORE_IRQS - 32),
+        VMSTATE_UINT32_ARRAY(dist.fiq_pending, periph_state, 4),
+        VMSTATE_UINT32_ARRAY(dist.ier_int, periph_state, MAX_MPCORE_CPUS),
+        VMSTATE_UINT8_ARRAY(dist.ipr_int[0], periph_state, 32),
+        VMSTATE_UINT8_ARRAY(dist.ipr_int[1], periph_state, 32),
+        VMSTATE_UINT8_ARRAY(dist.ipr_int[2], periph_state, 32),
+        VMSTATE_UINT8_ARRAY(dist.ipr_int[3], periph_state, 32),
+        VMSTATE_UINT8_ARRAY(dist.iptr_int[0], periph_state, 32),
+        VMSTATE_UINT8_ARRAY(dist.iptr_int[1], periph_state, 32),
+        VMSTATE_UINT8_ARRAY(dist.iptr_int[2], periph_state, 32),
+        VMSTATE_UINT8_ARRAY(dist.iptr_int[3], periph_state, 32),
+        VMSTATE_UINT32_ARRAY(dist.pending_irq_int, periph_state, MAX_MPCORE_CPUS),
+        VMSTATE_UINT32_ARRAY(dist.abr_int, periph_state, MAX_MPCORE_CPUS),
+        VMSTATE_UINT32_ARRAY(dist.intline_int, periph_state, MAX_MPCORE_CPUS),
+
+        /* security extensions */
+        VMSTATE_UINT32_ARRAY(dist.isr_int, periph_state, MAX_MPCORE_CPUS),
+        VMSTATE_UINT32_ARRAY(dist.isr_ext, periph_state, MAX_DIST_EXT_INT_STATE_VARS),
         VMSTATE_END_OF_LIST()
     }
 };
-#endif
 
 static int periph_init(SysBusDevice *dev)
 {
@@ -1128,6 +1190,7 @@ static int periph_init(SysBusDevice *dev)
         s->fiq_state[n] = 2;
         s->cpu[n].intid = 0x3FF;
         s->cpu[n].apr = 0xFF;
+        s->dist.isr_int[n] = 0;
     }
     for(n = 0; n < s->num_cpu; ++n)
     {
@@ -1153,6 +1216,7 @@ static int periph_init(SysBusDevice *dev)
         s->dist.ier_ext[n] = 0;
         s->dist.ipr_ext[n] = 0;
         s->dist.icfr_ext[n] = 0;
+        s->dist.isr_ext[n] = 0;
     }
 
     /* make iptr default to all valid cpu interfaces set */
@@ -1161,7 +1225,7 @@ static int periph_init(SysBusDevice *dev)
         s->dist.iptr_ext[n - 32] = (1 << s->num_cpu) - 1;
     }
 
-
+    vmstate_register(&dev->qdev, -1, &vmstate_periph, s);
     return 0;
 }
 
