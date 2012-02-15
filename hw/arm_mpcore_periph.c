@@ -227,12 +227,13 @@ static void gic_irq_update(periph_state* s)
         if(s->cpu[cpu].icr & 1)
         {
             gic_set_cpu_irq(s, cpu, irq_out[cpu]);
+            gic_set_cpu_fiq(s, cpu, s->dist.fiq_pending[cpu]);
         }
         else
         {
             gic_set_cpu_irq(s, cpu, 0);
+            gic_set_cpu_fiq(s, cpu, 0);
         }
-        gic_set_cpu_fiq(s, cpu, s->dist.fiq_pending[cpu]);
     }
 }
 
@@ -561,6 +562,7 @@ static uint64_t dist_read(void* opaque, target_phys_addr_t offset, unsigned size
             break;
 
         case DIST_OFS_DCR >> 2:
+            c = s->dist.dcr;
             break;
 
         case DIST_OFS_ICTR >> 2:

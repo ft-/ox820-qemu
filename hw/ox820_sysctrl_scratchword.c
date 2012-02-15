@@ -56,7 +56,6 @@ static void ox820_sysctrl_scratchword_write(void *opaque, target_phys_addr_t off
         break;
 
     case 0x0004 >> 2:
-        printf("Holding Pen Location written with %u\n", (uint32_t) value);
         s->scratchword[1] = value;
         break;
 

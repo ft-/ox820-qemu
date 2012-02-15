@@ -21,24 +21,9 @@
 #include "flash.h"
 #include "cpu-common.h"
 #include "cpu.h"
+#include "ox820-stage0-emu.h"
 
 /* Board init.  */
-
-static uint32_t smpboot[] = {
-    0xe3a0064e,     /* ldr r0, =0x04e00000 */
-    0xe3a02447,     /* ldr r1, =0x47000000 */
-    0xe3a01001,     /* mov r1, #1 */
-    0xe5821100,     /* str r1, [r2, #256] */
-    0xe320f003,     /* loop: wfi */
-    0xe59040c4,     /* ldr r4, [r0, #0xc4] */
-    0xe3540000,     /* cmp r4, #0 */
-    0x0afffffb,     /* beq loop */
-    0xe590f0c8,     /* ldr pc, [r0, #0xc8] */
-};
-
-static uint32_t emptyboot[] = {
-  0xeafffffe
-};
 
 static void ox820_write_secondary(CPUState *env,
                                   const struct arm_boot_info *info)
@@ -50,13 +35,6 @@ static struct arm_boot_info ox820_cpu0_binfo = {
     .loader_start = 0x60000000,
     .board_id = 0x480,
     .is_linux = 1,
-    .write_secondary_boot = ox820_write_secondary
-};
-
-static struct arm_boot_info ox820_cpu1_binfo = {
-    .loader_start = 0x00008000,
-    .board_id = 0x480,
-    .entry = 0x00008000,
     .write_secondary_boot = ox820_write_secondary
 };
 
@@ -74,6 +52,22 @@ static void ox820_reset(void* opaque, int irq, int level)
     {
         qemu_system_reset(0);
     }
+}
+
+static void ox820_cpu_reset(void* opaque, int irq, int level)
+{
+    if(level)
+    {
+        cpu_reset(opaque);
+    }
+}
+
+static void ox820_def_cpu_reset(void *opaque)
+{
+    CPUState *env = opaque;
+
+    cpu_reset(env);
+    env->regs[15] = 0;
 }
 
 static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
@@ -105,29 +99,12 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     MemoryRegion* rpsa_region = g_new(MemoryRegion, 1);
     MemoryRegion* rpsc_region = g_new(MemoryRegion, 1);
     MemoryRegion* sysctrl_region = g_new(MemoryRegion, 1);
-    MemoryRegion* smpboot_ram = g_new(MemoryRegion, 1);
     qemu_irq* reset_irq;
+    qemu_irq* cpu0_reset_irq;
+    qemu_irq* cpu1_reset_irq;
     int i;
 
-    reset_irq = qemu_allocate_irqs(ox820_reset,
-                                   0, 1);
-
-    cpu_model = "arm11mpcore";
-    env0 = cpu_init(cpu_model);
-    if (!env0) {
-        fprintf(stderr, "Unable to find CPU definition\n");
-        exit(1);
-    }
-
-    if(num_cpus > 1)
-    {
-        env1 = cpu_init(cpu_model);
-        if(!env1) {
-            fprintf(stderr, "Unable to find CPU definition\n");
-            exit(1);
-        }
-    }
-
+    /* RAM must be first, so that we can call arm_load_kernel if needed */
     memory_region_init(main_1gb_region, "main", 0x40000000);
 
     memory_region_init(rpsa_region, "ox820-rpsa", 0x100000);
@@ -144,15 +121,56 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     vmstate_register_ram_global(ram);
     memory_region_init_ram(rom, "ox820.rom", 32768);
     vmstate_register_ram_global(rom);
-    memory_region_init_ram(smpboot_ram, "smpboot", 0x100);
 
-    /* address range 0x00008000--0x0000801F is not used on real ox820 */
-    memory_region_add_subregion(main_1gb_region, 0x00008000, smpboot_ram);
     /* address range 0x00000000--0x00007FFF is occupied by a 32kB Boot Rom */
     memory_region_add_subregion(main_1gb_region, 0x00000000, rom);
     /* address range 0x20000000--0x2FFFFFFF is SDRAM region */
     memory_region_add_subregion(main_1gb_region, 0x20000000, ram);
     memory_region_add_subregion(main_1gb_region, 0x10000000, scratch);
+
+
+    reset_irq = qemu_allocate_irqs(ox820_reset,
+                                   0, 1);
+
+    cpu_model = "arm11mpcore";
+    env0 = cpu_init(cpu_model);
+    if (!env0) {
+        fprintf(stderr, "Unable to find CPU definition\n");
+        exit(1);
+    }
+
+    ox820_cpu0_binfo.ram_size = ram_size;
+    ox820_cpu0_binfo.nb_cpus = 2;
+
+    if(NULL != kernel_filename)
+    {
+        ox820_cpu0_binfo.kernel_filename = kernel_filename;
+        ox820_cpu0_binfo.kernel_cmdline = kernel_cmdline;
+        ox820_cpu0_binfo.initrd_filename = initrd_filename;
+        arm_load_kernel(env0, &ox820_cpu0_binfo);
+    }
+    else
+    {
+        qemu_register_reset(ox820_def_cpu_reset, env0);
+    }
+
+
+    cpu0_reset_irq = qemu_allocate_irqs(ox820_cpu_reset,
+                                        env0, 1);
+
+    if(num_cpus > 1)
+    {
+        env1 = cpu_init(cpu_model);
+        if(!env1) {
+            fprintf(stderr, "Unable to find CPU definition\n");
+            exit(1);
+        }
+
+        cpu1_reset_irq = qemu_allocate_irqs(ox820_cpu_reset,
+                                            env1, 1);
+        /* we register our own reset handler here */
+        qemu_register_reset(ox820_def_cpu_reset, env1);
+    }
 
     cpu_pic0 = arm_pic_init_cpu(env0);
     if(num_cpus > 1)
@@ -191,6 +209,11 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     sysctrl_busdev = sysbus_from_qdev(dev);
     memory_region_add_subregion(sysctrl_region, 0x00000024, sysbus_mmio_get_region(sysctrl_busdev, 0));
     sysbus_connect_irq(sysctrl_busdev, 0, reset_irq[0]);
+    sysbus_connect_irq(sysctrl_busdev, 2, cpu0_reset_irq[0]);
+    if(num_cpus > 1)
+    {
+        sysbus_connect_irq(sysctrl_busdev, 3, cpu1_reset_irq[0]);
+    }
 
     /*=========================================================================*/
     /* RPS-A */
@@ -408,29 +431,8 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     sysbus_connect_irq(sysctrl_busdev, 32 + 4, qdev_get_gpio_in(dev, 1));   /* CKEN */
     /*=========================================================================*/
     /* Boot Config */
-    for (i = 0; i < ARRAY_SIZE(emptyboot); i++) {
-        emptyboot[i] = tswap32(emptyboot[i]);
-    }
-    rom_add_blob_fixed("emptyboot", emptyboot, sizeof(emptyboot),
+    rom_add_blob_fixed("emptyboot", ox820_stage0, sizeof(ox820_stage0),
                        0x0000);
-
-    for (i = 0; i < ARRAY_SIZE(smpboot); i++) {
-        smpboot[i] = tswap32(smpboot[i]);
-    }
-    rom_add_blob_fixed("smpboot", smpboot, sizeof(smpboot),
-                       0x8000);
-
-    ox820_cpu0_binfo.ram_size = ram_size;
-    ox820_cpu0_binfo.kernel_filename = kernel_filename;
-    ox820_cpu0_binfo.kernel_cmdline = kernel_cmdline;
-    ox820_cpu0_binfo.initrd_filename = initrd_filename;
-    ox820_cpu0_binfo.nb_cpus = num_cpus;
-    arm_load_kernel(env0, &ox820_cpu0_binfo);
-    ox820_cpu1_binfo.ram_size = ram_size;
-    if(NULL != env1)
-    {
-        env1->boot_info = &ox820_cpu1_binfo;
-    }
 
     return main_1gb_region;
 }
