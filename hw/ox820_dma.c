@@ -182,6 +182,7 @@ typedef struct ox820_dma_state {
     uint32_t        dma_running;
     uint32_t        last_high_prio_ch;
     uint32_t        last_low_prio_ch;
+    uint16_t        start_stop;
 
     struct
     {
@@ -596,72 +597,83 @@ static int ox820_dma_ch_run(ox820_dma_state* s, ox820_dma_channel_state* channel
     if((channel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_DMA_IN_PROGRESS) &&
        !(channel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_PAUSE_DMA))
     {
-        uint8_t buf[256];
+        if(s->start_stop & (1u << channel->dma_ch_number))
+        {
+            uint8_t buf[256];
 
-        /* we only do memory for now */
-        if((channel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_SFT_D_DREQ) != MSK_DMA_CTRL_STAT_SFT_D_DREQ)
-        {
-            channel->dma_current_byte_count = 0;
-            channel->dma_ctrl_stat &= (~MSK_DMA_CTRL_STAT_DMA_IN_PROGRESS);
-        }
-        else if((channel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_SFT_S_DREQ) != MSK_DMA_CTRL_STAT_SFT_S_DREQ)
-        {
-            channel->dma_current_byte_count = 0;
-            channel->dma_ctrl_stat &= (~MSK_DMA_CTRL_STAT_DMA_IN_PROGRESS);
+            /* we only do memory for now */
+            if((channel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_SFT_D_DREQ) != MSK_DMA_CTRL_STAT_SFT_D_DREQ)
+            {
+                channel->dma_current_byte_count = 0;
+                channel->dma_ctrl_stat &= (~MSK_DMA_CTRL_STAT_DMA_IN_PROGRESS);
+            }
+            else if((channel->dma_ctrl_stat & MSK_DMA_CTRL_STAT_SFT_S_DREQ) != MSK_DMA_CTRL_STAT_SFT_S_DREQ)
+            {
+                channel->dma_current_byte_count = 0;
+                channel->dma_ctrl_stat &= (~MSK_DMA_CTRL_STAT_DMA_IN_PROGRESS);
+            }
+            else
+            {
+                uint32_t burstsize = 256;
+                if(burstsize > (channel->dma_current_byte_count & MSK_DMA_BYTECOUNT_BYTE_COUNT))
+                {
+                    burstsize = (channel->dma_current_byte_count & MSK_DMA_BYTECOUNT_BYTE_COUNT);
+                }
+
+                /* copy src */
+                if(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_INC_ADDR_S)
+                {
+                    /* bit[3:0] increment */
+                    ox820_dma_ch_read_inclow4(s, channel, buf, burstsize);
+                }
+                else if(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_FIXED_ADDR_S)
+                {
+                    /* address is fixed */
+                    ox820_dma_ch_read_fixed(s, channel, buf, burstsize);
+                }
+                else
+                {
+                    /* address increments */
+                    ox820_dma_ch_read_inc(s, channel, buf, burstsize);
+                }
+
+                /* copy dst */
+                if(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_INC_ADDR_D)
+                {
+                    /* bit[3:0] increment */
+                    ox820_dma_ch_write_inclow4(s, channel, buf, burstsize);
+                }
+                else if(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_FIXED_ADDR_D)
+                {
+                    /* address is fixed */
+                    ox820_dma_ch_write_fixed(s, channel, buf, burstsize);
+                }
+                else
+                {
+                    /* address increments */
+                    ox820_dma_ch_write_inc(s, channel, buf, burstsize);
+                }
+
+                channel->dma_current_byte_count -= burstsize;
+
+                if(0 == (channel->dma_current_byte_count & MSK_DMA_BYTECOUNT_BYTE_COUNT))
+                {
+                    if(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_INT_ENABLE)
+                    {
+                        s->int_out |= (1u << channel->dma_ch_number);
+                        ox820_dma_int_update(s);
+                    }
+                    channel->dma_ctrl_stat &= ~MSK_DMA_CTRL_STAT_DMA_IN_PROGRESS;
+                }
+                else
+                {
+                    more_dma = 1;
+                }
+            }
         }
         else
         {
-            uint32_t burstsize = 256;
-            if(burstsize > (channel->dma_current_byte_count & MSK_DMA_BYTECOUNT_BYTE_COUNT))
-            {
-                burstsize = (channel->dma_current_byte_count & MSK_DMA_BYTECOUNT_BYTE_COUNT);
-            }
-
-            /* copy src */
-            if(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_INC_ADDR_S)
-            {
-                /* bit[3:0] increment */
-                ox820_dma_ch_read_inclow4(s, channel, buf, burstsize);
-            }
-            else if(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_FIXED_ADDR_S)
-            {
-                /* address is fixed */
-                ox820_dma_ch_read_fixed(s, channel, buf, burstsize);
-            }
-            else
-            {
-                /* address increments */
-                ox820_dma_ch_read_inc(s, channel, buf, burstsize);
-            }
-
-            /* copy dst */
-            if(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_INC_ADDR_D)
-            {
-                /* bit[3:0] increment */
-                ox820_dma_ch_write_inclow4(s, channel, buf, burstsize);
-            }
-            else if(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_FIXED_ADDR_D)
-            {
-                /* address is fixed */
-                ox820_dma_ch_write_fixed(s, channel, buf, burstsize);
-            }
-            else
-            {
-                /* address increments */
-                ox820_dma_ch_write_inc(s, channel, buf, burstsize);
-            }
-
-            channel->dma_current_byte_count -= burstsize;
-
-            if(0 == (channel->dma_current_byte_count & MSK_DMA_BYTECOUNT_BYTE_COUNT))
-            {
-                if(channel->dma_current_ctrl_stat & MSK_DMA_CTRL_STAT_INT_ENABLE)
-                {
-                    s->int_out |= (1u << channel->dma_ch_number);
-                    ox820_dma_int_update(s);
-                }
-                channel->dma_ctrl_stat &= ~MSK_DMA_CTRL_STAT_DMA_IN_PROGRESS;
-            }
+            more_dma = 1;
         }
     }
 
@@ -695,15 +707,10 @@ static int ox820_sgdma_check(ox820_dma_state* s)
                 sgchannel->sgdma_status |= MSK_SGDMA_STATUS_BUSY;
             }
 
-            if((sgchannel->sgdma_info.qualifier & MSK_OX820_DMA_SG_QUALIFIER_CHANNEL) >> BIT_OX820_DMA_SG_QUALIFIER_CHANNEL >= s->num_channels)
-            {
-                /* channel invalid so stop */
-                sgchannel->sgdma_status &= (~MSK_SGDMA_STATUS_BUSY);
-            }
-            else if(sgchannel->sgdma_control & MSK_SGDMA_CONTROL_PRD_TABLE)
+            if(sgchannel->sgdma_control & MSK_SGDMA_CONTROL_PRD_TABLE)
             {
                 /* PRD tables */
-                ox820_dma_channel_state* dmachannel = &s->channel[(sgchannel->sgdma_info.qualifier & MSK_OX820_DMA_SG_QUALIFIER_CHANNEL) >> BIT_OX820_DMA_SG_QUALIFIER_CHANNEL];
+                ox820_dma_channel_state* dmachannel = &s->channel[n];
                 if((sgchannel->prd_src_entry.flags_len & MSK_OX820_SGDMA_PRD_EOT) ||
                    (sgchannel->prd_dst_entry.flags_len & MSK_OX820_SGDMA_PRD_EOT))
                 {
@@ -1123,6 +1130,21 @@ static void ox820_dma_set_irq(void* opaque, int irq, int level)
                 ox820_dma_schedule(s);  /* check dmas */
             }
             break;
+
+        default:
+            irq -= 2;
+            if(irq < 16)
+            {
+                if(level)
+                {
+                    s->start_stop |= (1u << irq);
+                }
+                else
+                {
+                    s->start_stop &= ~(1u << irq);
+                }
+            }
+            break;
     }
 }
 
@@ -1174,7 +1196,7 @@ static int ox820_dma_init(SysBusDevice *dev)
     }
     sysbus_init_mmio(dev, &s->iomem);
 
-    qdev_init_gpio_in(&dev->qdev, ox820_dma_set_irq, 2);
+    qdev_init_gpio_in(&dev->qdev, ox820_dma_set_irq, 2 + s->num_channels);
     s->bh = qemu_bh_new(ox820_dma_run, s);
 
     ox820_dma_reset(s);
@@ -1186,6 +1208,7 @@ static Property ox820_dma_properties[] = {
     DEFINE_PROP_UINT32("num-channel", ox820_dma_state, num_channels, 4),
     DEFINE_PROP_UINT32("cken", ox820_dma_state, cken, 0),
     DEFINE_PROP_UINT32("rsten", ox820_dma_state, rsten, 1),
+    DEFINE_PROP_UINT16("start-stop", ox820_dma_state, start_stop, 0xFFFF),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -1215,7 +1238,7 @@ device_init(ox820_dma_register_devices)
 
 DeviceState*
 ox820_dma_initialize(unsigned int num_channel,
-                     uint32_t cken, uint32_t rsten,
+                     uint32_t cken, uint32_t rsten, uint16_t start_stop,
                      void (* readblock_busb)(void* opaque, target_phys_addr_t, void* buf, int len),
                      void (* writeblock_busb)(void* opaque, target_phys_addr_t, const void* buf, int len),
                      void* opaque)
@@ -1226,6 +1249,7 @@ ox820_dma_initialize(unsigned int num_channel,
     qdev_prop_set_uint32(dev, "num-channel", num_channel);
     qdev_prop_set_uint32(dev, "cken", cken);
     qdev_prop_set_uint32(dev, "rsten", rsten);
+    qdev_prop_set_uint16(dev, "start-stop", start_stop);
     qdev_init_nofail(dev);
     s = FROM_SYSBUS(ox820_dma_state, sysbus_from_qdev(dev));
     s->busb.opaque = opaque;

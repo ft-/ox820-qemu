@@ -66,20 +66,40 @@
 
 /* core regs */
 #define OFS_SATA_CORE_DATA_MUX_DEBUG_1          0x0000
+#define OFS_SATA_CORE_RAID_SET                  0x0004
+#define OFS_SATA_CORE_DATA_MUX_DEBUG_2          0x0008
 #define OFS_SATA_CORE_DATA_COUNT_PORT_0         0x0010
+#define OFS_SATA_CORE_DATA_COUNT_PORT_1         0x0014
 #define OFS_SATA_CORE_INTERRUPT_STATUS          0x0030
 #define OFS_SATA_CORE_INTERRUPT_ENABLE_SET      0x0034
 #define OFS_SATA_CORE_INTERRUPT_ENABLE_CLEAR    0x0038
+#define OFS_SATA_CORE_REBUILD_ENABLE            0x0050
+#define OFS_SATA_CORE_FAILED_PORT_READ          0x0054
 #define OFS_SATA_CORE_CONTROL                   0x005C
 #define OFS_SATA_CORE_AHB_JBOD_DEBUG            0x0060
+#define OFS_SATA_CORE_DEVICE_CONTROL            0x0068
+#define OFS_SATA_CORE_EXCESS                    0x006C
 #define OFS_SATA_CORE_DISK_SIZE_LOWER           0x0070
 #define OFS_SATA_CORE_DISK_SIZE_UPPER           0x0074
 #define OFS_SATA_CORE_PORT_ERROR_MASK           0x0078
 #define OFS_SATA_CORE_IDLE_STATUS               0x007C
 #define OFS_SATA_CORE_DM_DEBUG_PTR0             0x0080
+#define OFS_SATA_CORE_RAID_CONTROL              0x0090
 #define OFS_SATA_CORE_DATA_PLANE_CTRL           0x00AC
 #define OFS_SATA_CORE_CONTEXT_MASK              0x00B4
 #define OFS_SATA_CORE_DATA_PLANE_STAT           0x00B8
+#define OFS_SATA_CORE_PROC_PC                   0x0100
+#define OFS_SATA_CORE_CONFIG_IN                 0x03D8
+#define OFS_SATA_CORE_PROC_START                0x03F0
+#define OFS_SATA_CORE_PROC_RESET                0x03F4
+#define OFS_SATA_CORE_UCODE_STORE               0x1000
+#define OFS_SATA_CORE_RAID_WP_BOT_LOW           0x1FF0
+#define OFS_SATA_CORE_RAID_WP_BOT_HIGH          0x1FF4
+#define OFS_SATA_CORE_RAID_WP_TOP_LOW           0x1FF8
+#define OFS_SATA_CORE_RAID_WP_TOP_HIGH          0x1FFC
+#define OFS_SATA_CORE_DATA_MUX_RAM0             0x8000
+#define OFS_SATA_CORE_DATA_MUX_RAM1             0xA000
+
 
 
 /* core ints */
@@ -89,6 +109,8 @@
 #define MSK_SATA_CORE_INT_PORT0                 0x00000001
 
 typedef struct {
+    qemu_irq        dma_start_stop;
+    uint32_t        dma_start_stop_state;
     uint32_t        orb1;
     uint32_t        orb2;
     uint32_t        orb3;
@@ -126,33 +148,13 @@ typedef struct {
     uint32_t        mse_info1;
     uint32_t        mse_info2;
     uint32_t        mse_info3;
-} ox820_sata_port;
 
-typedef struct {
-    uint32_t        orb1;
-    uint32_t        orb2;
-    uint32_t        orb3;
-    uint32_t        orb4;
-    uint32_t        orb5;
-    uint32_t        rbc1;
-    uint32_t        rbc2;
-    uint32_t        rbc3;
-    uint32_t        rbc4;
-    uint32_t        int_status;
-    uint32_t        int_enable;
-    uint32_t        command;
-    uint32_t        win_low_3100;
-    uint32_t        win_low_4732;
-    uint32_t        win_high_3100;
-    uint32_t        win_high_4732;
-    uint32_t        win_ctrl_zero;
-    uint32_t        win_ctrl_one;
-    uint32_t        win_ctrl_two;
-    uint32_t        backup1;
-    uint32_t        backup2;
-    uint32_t        backup3;
-    uint32_t        backup4;
-} ox820_sata_raid;
+    uint32_t        scr_status;
+    uint32_t        scr_error;
+    uint32_t        scr_control;
+    uint32_t        scr_active;
+    uint32_t        scr_notification;
+} ox820_sata_port;
 
 typedef struct {
     uint32_t        data_mux_debug1;
@@ -187,32 +189,98 @@ typedef struct {
     uint32_t        ucode_type;
     union
     {
-        uint32_t        dword[0x100];
-        uint8_t         byte[0x400];
+        uint32_t        _dword[0x0400];
+        uint8_t         byte[0x1000];
     } ucode;
     ox820_sata_port port[2];
     ox820_sata_core core;
-    ox820_sata_raid raid_port;
+    ox820_sata_port raid_port;  /* for simplicity we reuse the ox820_sata_port structure but no do not use some fields */
 } ox820_sata_state;
 
 enum ox820_sata_ucode_t
 {
     OX820_SATA_UCODE_UNKNOWN,
     OX820_SATA_UCODE_JBOD,
-    OX820_SATA_UCODE_RAID
+    OX820_SATA_UCODE_RAID,
+    OX820_SATA_UCODE_NONE
 };
+
+/* SCR_ERROR defines (only needed ones) */
+#define MSK_SCR_ERROR_LINK_SEQ_ERROR        (1 << 23)
+
+static void ox820_sata_dma_start_stop(ox820_sata_port* port, int enable)
+{
+    if(enable && !port->dma_start_stop_state)
+    {
+        qemu_set_irq(port->dma_start_stop, port->dma_start_stop_state = 1);
+    }
+    else if(!enable && port->dma_start_stop_state)
+    {
+        qemu_set_irq(port->dma_start_stop, port->dma_start_stop_state = 1);
+    }
+}
 
 static enum ox820_sata_ucode_t __attribute__((used)) ox820_sata_identify_ucode(ox820_sata_state* s)
 {
-    uint32_t crc = crc32(~0, s->ucode.byte, 0x2b4);
+    uint32_t crc = crc32(~0, s->ucode.byte, 0x2b0);
+    printf("Detected SATA uCode CRC-32 %08X\r\n", (unsigned int) crc);
     switch(crc)
     {
-        case 0xa83cb8bd:
+        case 0xe26326bb:
             return OX820_SATA_UCODE_JBOD;
-        case 0x33788817:
+        case 0x83b78cac:
             return OX820_SATA_UCODE_RAID;
         default:
             return OX820_SATA_UCODE_UNKNOWN;
+    }
+}
+
+static void ox820_sata_link_read(ox820_sata_state* s, ox820_sata_port* port)
+{
+    port->link_async_data = 0;
+    switch(port->link_async_r_addr)
+    {
+        case 0x20:  /* SCR_STATUS */
+            port->link_async_data = port->scr_status;
+            break;
+
+        case 0x24:  /* SCR_ERROR */
+            port->link_async_data = port->scr_error;
+            break;
+
+        case 0x28:  /* SCR_CONTROL */
+            port->link_async_data = port->scr_control;
+            break;
+
+        case 0x2C:  /* SCR_ACTIVE */
+            port->link_async_data = port->scr_active;
+            break;
+
+        case 0x30:  /* SCR_NOTIFICATION */
+            port->link_async_data = port->scr_notification;
+            break;
+    }
+}
+
+static void ox820_sata_link_write(ox820_sata_state* s, ox820_sata_port* port)
+{
+    switch(port->link_async_w_addr)
+    {
+        case 0x20:  /* SCR_STATUS */
+            break;
+
+        case 0x24:  /* SCR_ERROR */
+            break;
+
+        case 0x28:  /* SCR_CONTROL */
+            port->scr_control = port->link_async_data;
+            break;
+
+        case 0x2C:  /* SCR_ACTIVE */
+            break;
+
+        case 0x30:  /* SCR_NOTIFICATION */
+            break;
     }
 }
 
@@ -278,7 +346,7 @@ static uint64_t ox820_sata_port_read(ox820_sata_state* s , ox820_sata_port* port
             break;
 
         case OFS_SATA_PORT_VERSION >> 2:
-            c = 0x1f4;
+            c = 0x1f3;
             break;
 
         case OFS_SATA_PORT_SACTIVE >> 2:
@@ -414,6 +482,7 @@ static void ox820_sata_port_write(ox820_sata_state* s, ox820_sata_port* port,
             break;
 
         case OFS_SATA_PORT_FIS_CTRL >> 2:
+            hw_error("ox820-sata: FIS_CTRL is not supported\n");
             port->fis_ctrl = value;
             break;
 
@@ -460,7 +529,19 @@ static void ox820_sata_port_write(ox820_sata_state* s, ox820_sata_port* port,
             break;
 
         case OFS_SATA_PORT_COMMAND >> 2:
-            port->command = value;
+            port->command = (port->command & 0xFF00FF80) | (value & 0x1F);
+            switch(port->command & 7)
+            {
+                case 4: /* Write to ORB regs , no command */
+                    break;
+
+                case 2: /* Write to ORB regs */
+                    ox820_sata_dma_start_stop(port, 1);
+                    break;
+
+                case 7: /* Sync Escape */
+                    break;
+            }
             break;
 
         case OFS_SATA_PORT_PORT_CTRL >> 2:
@@ -476,10 +557,12 @@ static void ox820_sata_port_write(ox820_sata_state* s, ox820_sata_port* port,
             break;
         case OFS_SATA_PORT_LINK_ASYNC_R_ADDR >> 2:
             port->link_async_r_addr = value;
+            ox820_sata_link_read(s, port);
             break;
 
         case OFS_SATA_PORT_LINK_ASYNC_W_ADDR >> 2:
             port->link_async_w_addr = value;
+            ox820_sata_link_write(s, port);
             break;
 
         case OFS_SATA_PORT_LINK_ASYNC_CTRL >> 2:
@@ -519,22 +602,6 @@ static void ox820_sata_port_write(ox820_sata_state* s, ox820_sata_port* port,
 
         case OFS_SATA_PORT_PIO_SIZE >> 2:
             port->pio_size = value;
-            break;
-
-        case OFS_SATA_PORT_BACKUP1 >> 2:
-            port->backup1 = value;
-            break;
-
-        case OFS_SATA_PORT_BACKUP2 >> 2:
-            port->backup2 = value;
-            break;
-
-        case OFS_SATA_PORT_BACKUP3 >> 2:
-            port->backup3 = value;
-            break;
-
-        case OFS_SATA_PORT_BACKUP4 >> 2:
-            port->backup4 = value;
             break;
 
         case OFS_SATA_PORT_MSE_INFO1 >> 2:
@@ -601,9 +668,13 @@ static uint64_t ox820_sata_core_read(void *opaque, target_phys_addr_t offset,
     ox820_sata_state *s = opaque;
     uint32_t c = 0;
     offset &= 0xFFFF;
-    if(offset >= 0x1000 && offset <= 0x13FF)
+    if(offset >= 0x1000 && offset < 0x2000)
     {
-        c = s->ucode.dword[offset >> 2];
+        offset &= 0xFFC;
+        c = s->ucode.byte[offset] |
+            (s->ucode.byte[offset + 1] << 8u) |
+            (s->ucode.byte[offset + 2] << 16u) |
+            (s->ucode.byte[offset + 3] << 24u);
     }
     else
     {
@@ -676,9 +747,13 @@ static void ox820_sata_core_write(void *opaque, target_phys_addr_t offset,
 {
     ox820_sata_state *s = opaque;
     offset &= 0xFFFF;
-    if(offset >= 0x1000 && offset <= 0x13FF)
+    if(offset >= 0x1000 && offset < 0x2000)
     {
-        s->ucode.dword[offset >> 2] = (uint32_t) value;
+        offset &= 0xFFF;
+        s->ucode.byte[offset] = (value >> 0) & 0xFF;
+        s->ucode.byte[offset + 1] = (value >> 8) & 0xFF;
+        s->ucode.byte[offset + 2] = (value >> 16) & 0xFF;
+        s->ucode.byte[offset + 3] = (value >> 24) & 0xFF;
     }
     else
     {
@@ -742,6 +817,30 @@ static void ox820_sata_core_write(void *opaque, target_phys_addr_t offset,
 
             case OFS_SATA_CORE_DATA_PLANE_STAT >> 2:
                 s->core.data_plane_stat = value;
+                break;
+
+            case OFS_SATA_CORE_PROC_START >> 2:
+                if(value & 1)
+                {
+                    s->ucode_type = ox820_sata_identify_ucode(s);
+
+                    switch(s->ucode_type)
+                    {
+                        case OX820_SATA_UCODE_JBOD:
+                            break;
+
+                        case OX820_SATA_UCODE_RAID:
+                            break;
+
+                        default:
+                            hw_error("Unknown OX820 SATA uCode detected\n");
+                            break;
+                    }
+                }
+                break;
+
+            case OFS_SATA_CORE_PROC_RESET >> 2:
+                s->ucode_type = OX820_SATA_UCODE_NONE;
                 break;
         }
     }
@@ -948,22 +1047,6 @@ static void ox820_sata_raid_write(void *opaque, target_phys_addr_t offset,
             s->raid_port.win_ctrl_two = value;
             break;
 
-        case OFS_SATA_PORT_BACKUP1 >> 2:
-            s->raid_port.backup1 = value;
-            break;
-
-        case OFS_SATA_PORT_BACKUP2 >> 2:
-            s->raid_port.backup2 = value;
-            break;
-
-        case OFS_SATA_PORT_BACKUP3 >> 2:
-            s->raid_port.backup3 = value;
-            break;
-
-        case OFS_SATA_PORT_BACKUP4 >> 2:
-            s->raid_port.backup4 = value;
-            break;
-
     }
 }
 
@@ -1074,7 +1157,7 @@ static int ox820_sata_init(SysBusDevice *dev)
     memory_region_init_io(&s->iomem_core, &ox820_sata_core_ops, s, "core", 0x10000);
     memory_region_init_io(&s->iomem_raid, &ox820_sata_raid_ops, s, "raid", 0x10000);
 
-    dma_dev = ox820_dma_initialize(2, 0, 1,
+    dma_dev = ox820_dma_initialize(2, 0, 1, 0,
                                    ox820_readblock,
                                    ox820_writeblock,
                                    s);
@@ -1082,6 +1165,8 @@ static int ox820_sata_init(SysBusDevice *dev)
     busdev = sysbus_from_qdev(dma_dev);
     s->dma_irq[0] = qdev_get_gpio_in(dma_dev, 0);
     s->dma_irq[1] = qdev_get_gpio_in(dma_dev, 1);
+    s->port[0].dma_start_stop = qdev_get_gpio_in(dma_dev, 2);
+    s->port[1].dma_start_stop = qdev_get_gpio_in(dma_dev, 2);
     memory_region_add_subregion(&s->iomem, 0x00000, &s->iomem_port0);
     memory_region_add_subregion(&s->iomem, 0x10000, &s->iomem_port1);
     memory_region_add_subregion(&s->iomem, 0xA0000, sysbus_mmio_get_region(busdev, 0));
