@@ -366,7 +366,7 @@ obj-arm-y += pl041.o lm4549.o
 obj-arm-y += ox820.o ox820_rps_irq.o ox820_rps_timer.o ox820_rps_misc.o ox820_static.o ox820_secctrl.o ox820_gpio.o
 obj-arm-y += ox820_sysctrl_rstck.o ox820_sysctrl_sema.o ox820_sysctrl_plla.o ox820_sysctrl_mfa.o
 obj-arm-y += ox820_sysctrl_ref300.o ox820_sysctrl_scratchword.o ox820_nand.o arm_mpcore_periph.o
-obj-arm-y += ox820_dma.o ox820_sataphy.o ox820_pciephy.o ox820_sata.o
+obj-arm-y += ox820_dma.o ox820_sataphy.o ox820_pciephy.o ox820_sata.o ox820_gmac.o
 
 obj-sh4-y = shix.o r2d.o sh7750.o sh7750_regnames.o tc58128.o
 obj-sh4-y += sh_timer.o sh_serial.o sh_intc.o sh_pci.o sm501.o

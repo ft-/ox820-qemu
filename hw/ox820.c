@@ -70,10 +70,17 @@ static void ox820_def_cpu_reset(void *opaque)
     env->regs[15] = 0;
 }
 
+typedef enum ox820_variant
+{
+    OX820_VARIANT_7820,
+    OX820_VARIANT_7825
+} ox820_variant;
+
 static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
                               const char *boot_device,
                               const char *kernel_filename, const char *kernel_cmdline,
-                              const char *initrd_filename, const char *cpu_model)
+                              const char *initrd_filename, const char *cpu_model,
+                              ox820_variant variant)
 {
     int num_cpus = 2; /* 1, 2 */
     uint32_t chip_config;
@@ -251,6 +258,14 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     memory_region_add_subregion(rpsa_region, 0x00000220, sysbus_mmio_get_region(busdev, 0));
 
     dev = qdev_create(NULL, "ox820-rps-misc");
+    if(variant == OX820_VARIANT_7825)
+    {
+        qdev_prop_set_uint32(dev, "chip-id", 0x38323500);
+    }
+    else
+    {
+        qdev_prop_set_uint32(dev, "chip-id", 0x38323000);
+    }
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
     memory_region_add_subregion(rpsa_region, 0x000003C0, sysbus_mmio_get_region(busdev, 0));
@@ -281,12 +296,24 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     memory_region_add_subregion(rpsc_region, 0x00000220, sysbus_mmio_get_region(busdev, 0));
 
     dev = qdev_create(NULL, "ox820-rps-misc");
-    chip_config = 0;
+    chip_config = 0x201C0406;
     if(num_cpus > 1)
     {
         chip_config |= 0x00000001;
     }
+    if(variant == OX820_VARIANT_7825)
+    {
+        chip_config |= 0x818;
+    }
     qdev_prop_set_uint32(dev, "chip-configuration", chip_config);
+    if(variant == OX820_VARIANT_7825)
+    {
+        qdev_prop_set_uint32(dev, "chip-id", 0x38323500);
+    }
+    else
+    {
+        qdev_prop_set_uint32(dev, "chip-id", 0x38323000);
+    }
     qdev_init_nofail(dev);
     busdev = sysbus_from_qdev(dev);
     memory_region_add_subregion(rpsc_region, 0x000003C0, sysbus_mmio_get_region(busdev, 0));
@@ -419,6 +446,39 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     sysbus_connect_irq(sysctrl_busdev, 32 + 1, qdev_get_gpio_in(dev, 1));   /* CKEN */
 
     /*=========================================================================*/
+    /* GMACA */
+    dev = qdev_create(NULL, "ox820-gmac");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(main_1gb_region, 0x00400000, sysbus_mmio_get_region(busdev, 0));
+    splitirq[0] = qemu_irq_split(rpsa_pic[8], rpsc_pic[8]);
+    splitirq[0] = qemu_irq_split(gic_pic[40], splitirq[0]);
+    splitirq[1] = qemu_irq_split(rpsa_pic[17], rpsc_pic[17]);
+    splitirq[1] = qemu_irq_split(gic_pic[49], splitirq[1]);
+    sysbus_connect_irq(busdev, 0, splitirq[0]);
+    sysbus_connect_irq(busdev, 1, splitirq[1]);
+    sysbus_connect_irq(sysctrl_busdev, 6, qdev_get_gpio_in(dev, 0)); /* RSTEN */
+    sysbus_connect_irq(sysctrl_busdev, 32 + 7, qdev_get_gpio_in(dev, 1)); /* CKEN */
+
+    /*=========================================================================*/
+    /* GMACB */
+    if(variant == OX820_VARIANT_7825)
+    {
+        dev = qdev_create(NULL, "ox820-gmac");
+        qdev_init_nofail(dev);
+        busdev = sysbus_from_qdev(dev);
+        memory_region_add_subregion(main_1gb_region, 0x004800000, sysbus_mmio_get_region(busdev, 0));
+        splitirq[0] = qemu_irq_split(rpsa_pic[9], rpsc_pic[9]);
+        splitirq[0] = qemu_irq_split(gic_pic[41], splitirq[0]);
+        splitirq[1] = qemu_irq_split(rpsa_pic[28], rpsc_pic[28]);
+        splitirq[1] = qemu_irq_split(gic_pic[60], splitirq[1]);
+        sysbus_connect_irq(busdev, 0, splitirq[0]);
+        sysbus_connect_irq(busdev, 1, splitirq[1]);
+        sysbus_connect_irq(sysctrl_busdev, 22, qdev_get_gpio_in(dev, 0)); /* RSTEN */
+        sysbus_connect_irq(sysctrl_busdev, 32 + 10, qdev_get_gpio_in(dev, 1)); /* CKEN */
+
+    }
+    /*=========================================================================*/
     /* SATA */
     dev = qdev_create(NULL, "ox820-sata");
     qdev_init_nofail(dev);
@@ -429,6 +489,7 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     sysbus_connect_irq(busdev, 0, splitirq[0]);
     sysbus_connect_irq(sysctrl_busdev, 11, qdev_get_gpio_in(dev, 0));   /* RSTEN */
     sysbus_connect_irq(sysctrl_busdev, 32 + 4, qdev_get_gpio_in(dev, 1));   /* CKEN */
+
     /*=========================================================================*/
     /* Boot Config */
     rom_add_blob_fixed("stage0-emu", ox820_stage0, sizeof(ox820_stage0),
@@ -442,7 +503,7 @@ static void ox820_init_basic(ram_addr_t ram_size,
                               const char *kernel_filename, const char *kernel_cmdline,
                               const char *initrd_filename, const char *cpu_model)
 {
-    (void) ox820_init_common(ram_size, boot_device, kernel_filename, kernel_cmdline, initrd_filename, cpu_model);
+    (void) ox820_init_common(ram_size, boot_device, kernel_filename, kernel_cmdline, initrd_filename, cpu_model, OX820_VARIANT_7820);
 }
 
 static QEMUMachine ox820_machine = {
@@ -457,7 +518,7 @@ static void ox820_stg212_init(ram_addr_t ram_size,
                               const char *kernel_filename, const char *kernel_cmdline,
                               const char *initrd_filename, const char *cpu_model)
 {
-    MemoryRegion* main_1gb_region = ox820_init_common(ram_size, boot_device, kernel_filename, kernel_cmdline, initrd_filename, cpu_model);
+    MemoryRegion* main_1gb_region = ox820_init_common(ram_size, boot_device, kernel_filename, kernel_cmdline, initrd_filename, cpu_model, OX820_VARIANT_7820);
     DeviceState *dev;
     SysBusDevice *busdev;
     /*=========================================================================*/
