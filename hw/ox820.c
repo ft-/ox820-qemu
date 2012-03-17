@@ -431,7 +431,7 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     sysbus_connect_irq(sysctrl_busdev, 32 + 4, qdev_get_gpio_in(dev, 1));   /* CKEN */
     /*=========================================================================*/
     /* Boot Config */
-    rom_add_blob_fixed("emptyboot", ox820_stage0, sizeof(ox820_stage0),
+    rom_add_blob_fixed("stage0-emu", ox820_stage0, sizeof(ox820_stage0),
                        0x0000);
 
     return main_1gb_region;
