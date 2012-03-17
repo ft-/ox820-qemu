@@ -446,6 +446,16 @@ static MemoryRegion* ox820_init_common(ram_addr_t ram_size,
     sysbus_connect_irq(sysctrl_busdev, 32 + 1, qdev_get_gpio_in(dev, 1));   /* CKEN */
 
     /*=========================================================================*/
+    /* USB EHCI */
+    dev = qdev_create(NULL, "usb-ehci-ox820");
+    qdev_init_nofail(dev);
+    busdev = sysbus_from_qdev(dev);
+    memory_region_add_subregion(main_1gb_region, 0x00200000, sysbus_mmio_get_region(busdev, 0));
+    splitirq[0] = qemu_irq_split(rpsa_pic[7], rpsc_pic[7]);
+    splitirq[0] = qemu_irq_split(gic_pic[39], splitirq[0]);
+    sysbus_connect_irq(busdev, 0, splitirq[0]);
+
+    /*=========================================================================*/
     /* GMACA */
     dev = qdev_create(NULL, "ox820-gmac");
     qdev_init_nofail(dev);

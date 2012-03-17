@@ -53,7 +53,9 @@
 #define HCSPPORTROUTE1   CAPREGBASE + 0x000c
 #define HCSPPORTROUTE2   CAPREGBASE + 0x0010
 
+#ifndef OPREGBASE
 #define OPREGBASE        0x0020        // Operational Registers Base Address
+#endif
 
 #define USBCMD           OPREGBASE + 0x0000
 #define USBCMD_RUNSTOP   (1 << 0)      // run / Stop
@@ -368,7 +370,11 @@ struct EHCIQueue {
 };
 
 struct EHCIState {
+#ifndef CUSTOM_EHCI_DEVICE
     PCIDevice dev;
+#else
+    CUSTOM_EHCI_DEVICE dev;
+#endif
     USBBus bus;
     qemu_irq irq;
     MemoryRegion mem;
@@ -1110,7 +1116,11 @@ static inline int get_dwords(EHCIState *ehci, uint32_t addr,
     int i;
 
     for(i = 0; i < num; i++, buf++, addr += sizeof(*buf)) {
+#ifdef CUSTOM_USB_EHCI
+        cpu_physical_memory_read(addr, buf, sizeof(*buf));
+#else
         pci_dma_read(&ehci->dev, addr, buf, sizeof(*buf));
+#endif
         *buf = le32_to_cpu(*buf);
     }
 
@@ -1125,7 +1135,11 @@ static inline int put_dwords(EHCIState *ehci, uint32_t addr,
 
     for(i = 0; i < num; i++, buf++, addr += sizeof(*buf)) {
         uint32_t tmp = cpu_to_le32(*buf);
+#ifdef CUSTOM_USB_EHCI
+        cpu_physical_memory_write(addr, &tmp, sizeof(tmp));
+#else
         pci_dma_write(&ehci->dev, addr, &tmp, sizeof(tmp));
+#endif
     }
 
     return 1;
@@ -1188,7 +1202,11 @@ static int ehci_init_transfer(EHCIQueue *q)
     cpage  = get_field(q->qh.token, QTD_TOKEN_CPAGE);
     bytes  = get_field(q->qh.token, QTD_TOKEN_TBYTES);
     offset = q->qh.bufptr[0] & ~QTD_BUFPTR_MASK;
+#ifdef CUSTOM_USB_EHCI
+    qemu_sglist_init(&q->sgl, 5);
+#else
     pci_dma_sglist_init(&q->sgl, &q->ehci->dev, 5);
+#endif
 
     while (bytes > 0) {
         if (cpage > 4) {
@@ -1434,7 +1452,11 @@ static int ehci_process_itd(EHCIState *ehci,
                 return USB_RET_PROCERR;
             }
 
+#ifdef CUSTOM_USB_EHCI
+            qemu_sglist_init(&ehci->isgl, 2);
+#else
             pci_dma_sglist_init(&ehci->isgl, &ehci->dev, 2);
+#endif
             if (off + len > 4096) {
                 /* transfer crosses page border */
                 uint32_t len2 = off + len - 4096;
@@ -2158,7 +2180,11 @@ static void ehci_advance_periodic_state(EHCIState *ehci)
         }
         list |= ((ehci->frindex & 0x1ff8) >> 1);
 
+#ifdef CUSTOM_USB_EHCI
+        cpu_physical_memory_read(list, &entry, sizeof entry);
+#else
         pci_dma_read(&ehci->dev, list, &entry, sizeof entry);
+#endif
         entry = le32_to_cpu(entry);
 
         DPRINTF("PERIODIC state adv fr=%d.  [%08X] -> %08X\n",
@@ -2238,7 +2264,9 @@ static const MemoryRegionOps ehci_mem_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
+#ifndef CUSTOM_USB_EHCI
 static int usb_ehci_initfn(PCIDevice *dev);
+#endif
 
 static USBPortOps ehci_port_ops = {
     .attach = ehci_attach,
@@ -2263,6 +2291,7 @@ static Property ehci_properties[] = {
     DEFINE_PROP_END_OF_LIST(),
 };
 
+#ifndef CUSTOM_USB_EHCI
 static void ehci_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -2382,6 +2411,7 @@ static void ehci_register(void)
     type_register_static(&ich9_ehci_info);
 }
 device_init(ehci_register);
+#endif
 
 /*
  * vim: expandtab ts=4
